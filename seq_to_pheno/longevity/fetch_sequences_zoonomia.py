@@ -94,14 +94,36 @@ def filter_long_protein_sequences(file_paths, max_length=1000):
     return output_files
 
 
-def count_mapped_orthologs(file_paths, max_length=1000):
+def count_mapped_orthologs(file_paths):
     """
-    Filters sequences in the input file to only include those with fewer than `max_length` amino acids,
-    and writes the filtered sequences to a new file.
+    Counts the number of orthologs mapped to human for each species
 
     Parameters:
     file_path (str): The path to the file containing the sequences.
-    max_length (int): The maximum allowed length for sequences (default is 1000).
+
+    Returns:
+    pd.DataFrame: A DataFrame containing the number of orthologs mapped to human for each species.
+        of the shape: [transcript, protein, mapped_to, species],
+        where:
+            transcript is the HUMAN (reference) transcript ID,
+            protein is the HUMAN (reference) protein name,
+            mapped_to is non-human (query) organism transcript ID (e.g. elephant's transcript ID)
+            species is the name of the query species (e.g. 'Elephas_maximus__Asiatic_elephant__HLeleMax1'),
+            
+            The values in transcript and mapped_to are the orthologs.
+
+        For example, the first row should be:
+            transcript          protein        mapped_to   species
+            >ENST00000409217    ZFAND2B        77          Chrysochloris_asiatica__Cape_golden_mole__chrAsi1
+            
+            In this case, ENST00000409217<->77, so ENST00000409217 is the 
+                human transcript ID which is mapped to transcript 77 in the Cape golden mole.
+            ENST00000409217 codes for ZFAND2B
+        Note: 
+            - The file contains the mapping of orthologs to human, so the human transcript ID is always the reference.
+            - The file contains the mapping of proteins, not genes.
+            - A protein can be mapped to multiple orthologs in the same species.
+            - A protein can be mapped to multiple transcripts in humans
     """
     all_mapped_orthologs = []
     for file_path in file_paths:
@@ -137,16 +159,22 @@ ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulip
                 'Suina', 'Tylopoda', 'Whippomorpha', 'Xenarthra']
 
 BASE_URL = "http://genome.senckenberg.de/download/TOGA/human_hg38_reference/"
+
+# Fetch all the species
 species_directories = fetch_directory_listing(BASE_URL, ANIMAL_FAMILIES)
 
-# Download files from each species directory
-
-
+# Download alignment files
 all_downloaded_alignment_files = download_files(species_directories, 'proteinAlignments.fa.gz')
-decompressed_files = decompress_gz_files(all_downloaded_alignment_files)
+
+# Filter long protein sequences, remove them
 filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
+
+# Count the number of mapped orthologs for all species to humans
 all_mapped_ortholog_df = count_mapped_orthologs(filtered_files, max_length=1000)
+#all_mapped_ortholog_df is of the form :
+# [transcript, protein, mapped_to, species]
     
+
 
 # import pandas as pd
 # import numpy as np
