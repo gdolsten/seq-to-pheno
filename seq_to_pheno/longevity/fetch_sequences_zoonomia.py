@@ -12,7 +12,7 @@ def fetch_directory_listing(url, animal_families):
         response = requests.get(family_url, verify=False)
         soup = BeautifulSoup(response.text, 'html.parser')
         links = [urljoin(family_url, node.get('href')) for node in soup.find_all('a') if node.get('href').endswith('/')]
-        links = [x for x in links if x != url]
+        links = [x for x in links if x != url] # Ignore base directory
         all_links += links
     return all_links
 
@@ -171,9 +171,10 @@ filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, m
 
 # Count the number of mapped orthologs for all species to humans
 all_mapped_ortholog_df = count_mapped_orthologs(filtered_files, max_length=1000)
-#all_mapped_ortholog_df is of the form :
-# [transcript, protein, mapped_to, species]
-    
+
+n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
+
+print((n_alignments > 0).sum(axis=1).sort_values(ascending=False))
 
 
 # import pandas as pd
