@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import os
 import  gzip
+import numpy as np
 
 def fetch_directory_listing(url, animal_families):
     """Fetch and parse directory listing from a URL."""
@@ -43,23 +44,6 @@ def download_files(urls, file_name='proteinAlignments.fa.gz'):
                 print(f"Failed to download {file_url}: Status code {response.status_code}")
         all_downloaded_files.append(file_path)
     return all_downloaded_files
-
-#  DEPRECATE: just work with gzipped files
-# def decompress_gz_files(all_file_paths):
-#     """Decompress all .gz files in the specified directory."""
-#     decompressed_files = []
-#     for filename in all_file_paths:
-#             gz_path = filename
-#             out_path = filename[:-3]
-            
-#             # Open the gzipped file and create a decompressed output file
-#             with gzip.open(gz_path, 'rb') as f_in:
-#                 with open(out_path, 'wb') as f_out:
-#                     f_out.write(f_in.read())
-#             print(f"Decompressed: {gz_path} -> {out_path}")
-#             decompressed_files.append(out_path)
-#     return decompressed_files
-
 
 def count_mapped_orthologs(file_paths):
     """
@@ -197,7 +181,6 @@ def filter_multimap_protein_sequences(file_paths, proteins_to_keep):
         print(f"Success: {success}, Failure: {failure}; {success/(success+failure):.2f} success rate")
     return output_files
 
-refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
 
 
 ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulipotyphla', 'Lagomorpha', 'Metatheria', 
@@ -222,10 +205,147 @@ MAX_NUMBER_ORTHOLOGS = 20
 n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
 n_alignments = n_alignments[(n_alignments > 0).all(axis=1)]
 proteins_to_keep = set(n_alignments.index[(n_alignments < MAX_NUMBER_ORTHOLOGS).all(axis=1)])
+
 # Remove proteins with more than 20 orthologs in any species
 refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
 
 
+
+def fetch_sequences_from_files(file_paths, protein_name):
+    """
+    Fetches the reference and query sequences for a specific protein from a file.
+
+    Parameters:
+    file_path (str): The path to the file containing the sequences.
+    protein_name (str): The middle name of the protein to search for.
+
+    Returns:
+    tuple: A tuple containing the reference and query sequences if found, else None.
+    """
+    sequences = set()
+    for file_path in file_paths:
+        print("Processing", file_path)
+        species = file_path.split('/')[-2]
+        # Open the file and read its contents
+        with gzip.open(file_path, 'rt') as file:
+            lines = file.readlines()
+        
+        # Iterate through the lines to find reference and query sequences for the given protein
+        for i in range(len(lines)):
+            reference_check = f"| PROT | REFERENCE" in lines[i] and protein_name in lines[i]
+            query_check = f"| PROT | QUERY" in lines[i] and protein_name in lines[i]
+            if reference_check:
+                reference_sequence = lines[i + 1].strip().replace("-", '').replace('X', '')
+                sequences.add(('Human', reference_sequence))
+            elif query_check:
+                query_sequence = lines[i + 1].strip().replace("-", '').replace('X', '')
+                sequences.add((species, query_sequence))
+    return sequences
+
+
+def fetch_all_sequences_from_files(file_paths):
+    """
+    Fetches the reference and query sequences for a specific protein from a file.
+
+    Parameters:
+    file_path (str): The path to the file containing the sequences.
+    protein_name (str): The middle name of the protein to search for.
+
+    Returns:
+    tuple: A tuple containing the reference and query sequences if found, else None.
+    """
+    seqdict = {}
+    for file_path in file_paths:
+        print("Processing", file_path)
+        species = file_path.split('/')[-2]
+        # Open the file and read its contents
+        with gzip.open(file_path, 'rt') as file:
+            lines = file.readlines()
+        
+        # Iterate through the lines to find reference and query sequences for the given protein
+        for i in range(len(lines)):
+            reference_check = f"| PROT | REFERENCE" in lines[i]
+            query_check = f"| PROT | QUERY" in lines[i]
+            if reference_check:
+                reference_sequence = lines[i + 1].strip().replace("-", '').replace('X', '')
+                seqdict[('Homo_sapiens', reference_sequence)] = lines[i].strip()
+            elif query_check:
+                query_sequence = lines[i + 1].strip().replace("-", '').replace('X', '')
+                seqdict[(species, query_sequence)] = lines[i].strip()
+
+    print("Processing seqdict")
+    results = []
+    for (species, sequence), metadata in seqdict.items():
+        metadata_vals = metadata.split(" |")[0].split(".")
+        if len(metadata_vals) > 3:
+            continue
+        else:   
+            ref_transcript, protein_name, quer_transcript = metadata_vals
+            ref_transcript = ref_transcript.replace(">", "")
+            if species == 'Homo_sapiens':
+                quer_transcript = ref_transcript
+            results.append([species, ref_transcript, protein_name, quer_transcript, sequence])
+
+    results_df = pd.DataFrame(results, columns = ['Species', 'ref_transcript', 'protein_name', 'quer_transcript', 'sequence'])
+    return results_df
+    # return seqdict #results_df
+
+results_df = fetch_all_sequences_from_files(refiltered_files)
+results_df['organism_name'] = results_df['Species'].apply(lambda x: x.split("__")[0] if x != 'Homo_sapiens' else x)
+results_df = results_df.set_index(['organism_name', 'protein_name', 'quer_transcript'])
+
+results_df = results_df[results_df['sequence'].apply(len) > 0]
+
+obj = SpeciesSequenceObject(results_df)
+obj.select("TP53")
+obj.saveas('data', 'protein_sequence_df.tsv')
+
+
+
+
+
+protein_name = 'TP53'
+sequences = fetch_sequences_from_files(refiltered_files, protein_name)
+to_fasta(sequences, 'examples/all_tp53.fa')
+
+
+
+protein_name = 'DNAL1'
+sequences = fetch_sequences_from_files(refiltered_files, protein_name)
+to_fasta(sequences, 'examples/all_dnal1.fa')
+
+
+
+
+protein_name = 'DNAL1'
+proteins = ['ZNRF2', 'VDAC1']
+import subprocess
+for protein in proteins:
+    sequences = fetch_sequences_from_files(refiltered_files, protein)
+    to_fasta(sequences, f'examples/all_{protein}.fa')
+    result = subprocess.run(['bash', 'run_esm.sh', protein], stdout=subprocess.PIPE)
+
+
+
+def to_fasta(sequence_set, file_path):
+    """
+    Converts a set of sequences to FASTA format.
+
+    Parameters:
+    sequence_set (set): A set containing tuples of species and sequences.
+
+    Returns:
+    str: A string containing the sequences in FASTA format.
+    """
+    
+    fastq = ""
+    for c, (species, sequence) in enumerate(sequence_set):
+        fastq += f">{species}.{c}\n{sequence}\n"
+
+    with open(file_path, 'w') as file:
+        file.write(fastq)
+    
+    return None
 
 
 print((n_alignments > 0).sum(axis=1).sort_values(ascending=False))
@@ -275,39 +395,4 @@ print((n_alignments > 0).sum(axis=1).sort_values(ascending=False))
 #     return seqlens
 
 
-
-def fetch_sequences_from_file(file_path, protein_name):
-    """
-    Fetches the reference and query sequences for a specific protein from a file.
-
-    Parameters:
-    file_path (str): The path to the file containing the sequences.
-    protein_name (str): The middle name of the protein to search for.
-
-    Returns:
-    tuple: A tuple containing the reference and query sequences if found, else None.
-    """
-    reference_sequence = ""
-    query_sequence = ""
-    
-    # Open the file and read its contents
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
-    
-    # Iterate through the lines to find reference and query sequences for the given protein
-    for i in range(len(lines)):
-        reference_check = f"| PROT | REFERENCE" in lines[i] and protein_name in lines[i]
-        if reference_check:
-            if len(reference_sequence) > 0:
-                raise ValueError("Multiple reference sequences found for the same protein.")
-            reference_sequence = lines[i + 1].strip()
-        elif f"| PROT | QUERY" in lines[i] and protein_name in lines[i]:
-            if len(query_sequence) > 0:
-                raise ValueError("Multiple reference sequences found for the same protein.")            
-            query_sequence = lines[i + 1].strip()
-    
-    if reference_sequence and query_sequence:
-        return reference_sequence, query_sequence
-    else:
-        return None
 
