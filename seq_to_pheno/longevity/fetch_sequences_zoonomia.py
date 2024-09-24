@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import os
+import  gzip
 import pandas as pd
 from huggingface_hub import HfApi
 # from seq_to_pheno.hug.utils import DatasetCard, DatasetPusher
@@ -66,40 +67,6 @@ def download_files(urls, file_name='proteinAlignments.fa.gz'):
 #             decompressed_files.append(out_path)
 #     return decompressed_files
 
-def filter_long_protein_sequences(file_paths, max_length=1000):
-    """
-    Filters sequences in the input file to only include those with fewer than `max_length` amino acids,
-    and writes the filtered sequences to a new file.
-
-    Parameters:
-    file_path (str): The path to the file containing the sequences.
-    max_length (int): The maximum allowed length for sequences (default is 1000).
-    """
-    output_files = []
-    for file_path in file_paths:
-        output_file = os.path.dirname(file_path) + f"/filtered.maxlen={max_length}." + os.path.basename(file_path)
-        output_files.append(output_file)
-        with gzip.open(file_path, 'rt') as infile, gzip.open(output_file, 'wt') as outfile:
-            lines = infile.readlines()
-
-            # Iterate through the lines to find reference and query sequences
-            i = 0
-            while i < len(lines):
-                if lines[i].startswith('>') and ("| PROT | REFERENCE" in lines[i] or "| PROT | QUERY" in lines[i]):
-                    sequence1 = lines[i + 1].strip()
-                    sequence2 = lines[i + 3].strip()
-                    # Check if the sequence length is less than or equal to max_length
-                    if (len(sequence1) <= max_length) or (len(sequence2) <= max_length):
-                        # Write the header and sequence to the output file
-                        outfile.write(lines[i])  # Write the header
-                        outfile.write(sequence1 + '\n')  # Write the sequence
-                        outfile.write(lines[i + 2])  # Write the header
-                        outfile.write(sequence2 + '\n')  # Write the sequence
-                    else:
-                        pass
-                i += 4  # Skip to the next sequence block
-    return output_files
-
 
 def count_mapped_orthologs(file_paths):
     """
@@ -159,6 +126,85 @@ def count_mapped_orthologs(file_paths):
     all_mapped_orthologs = pd.concat(all_mapped_orthologs, axis=0)
     return all_mapped_orthologs
 
+def filter_long_protein_sequences(file_paths, max_length=1000):
+    """
+    Filters sequences in the input file to only include those with fewer than `max_length` amino acids,
+    and writes the filtered sequences to a new file.
+
+    Parameters:
+    file_path (str): The path to the file containing the sequences.
+    max_length (int): The maximum allowed length for sequences (default is 1000).
+    """
+    output_files = []
+    for file_path in file_paths:
+        print("Processing", file_path)
+        output_file = os.path.dirname(file_path) + f"/filtered.maxlen={max_length}." + os.path.basename(file_path)
+        if os.path.exists(file_path):
+            output_files.append(output_file)
+            # if os.path.exists(output_file):
+                # print(f"File already exists: {output_file}")
+                # continue
+            with gzip.open(file_path, 'rt') as infile, gzip.open(output_file, 'wt') as outfile:
+                lines = infile.readlines()
+
+                # Iterate through the lines to find reference and query sequences
+                i = 0
+                while i < len(lines)-6:
+                    if lines[i].startswith('>') and ("| PROT | REFERENCE" in lines[i] or "| PROT | QUERY" in lines[i]):
+                        sequence1 = lines[i + 1].strip()
+                        sequence2 = lines[i + 3].strip()
+                        # Check if the sequence length is less than or equal to max_length
+                        if (len(sequence1) <= max_length) or (len(sequence2) <= max_length):
+                            # Write the header and sequence to the output file
+                            outfile.write(lines[i])  # Write the header
+                            outfile.write(lines[i+1])  # Write the sequence
+                            outfile.write(lines[i+2])  # Write the header
+                            outfile.write(lines[i+3])  # Write the sequence
+                        else:
+                            pass
+                    i += 4  # Skip to the next sequence block
+    return output_files
+
+def filter_multimap_protein_sequences(file_paths, proteins_to_keep):
+    """
+    Filters sequences in the input file to only include those with fewer than `max_number` orthologs,
+    and writes the filtered sequences to a new file.
+
+    Parameters:
+    file_path (str): The path to the file containing the sequences.
+    max_length (int): The maximum allowed length for sequences (default is 1000).
+    """
+    output_files = []
+    for file_path in file_paths:
+        print("Processing", file_path)
+        success = 0
+        failure = 0
+        output_file = os.path.dirname(file_path) + f"/nomultimap." + os.path.basename(file_path)
+        output_files.append(output_file)
+        with gzip.open(file_path, 'rt') as infile, gzip.open(output_file, 'wt') as outfile:
+            lines = infile.readlines()
+
+            # Iterate through the lines to find reference and query sequences
+            i = 0
+            while i < len(lines):
+                if lines[i].startswith('>') and ("| PROT | REFERENCE" in lines[i] or "| PROT | QUERY" in lines[i]):
+                    # Check if the protein has few enough orthologs
+                    protein = lines[i].strip().split("|")[0].split('.')[1]
+                    if (protein in proteins_to_keep):
+                        # Write the header and sequence to the output file
+                        outfile.write(lines[i])  # Write the header
+                        outfile.write(lines[i+1])  # Write the sequence
+                        outfile.write(lines[i+2])  # Write the header
+                        outfile.write(lines[i+3])  # Write the sequence
+                        success += 1
+                    else:
+                        failure += 1
+                    
+                i += 4  # Skip to the next sequence block
+        print(f"Success: {success}, Failure: {failure}; {success/(success+failure):.2f} success rate")
+    return output_files
+
+refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
 
 
 # ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulipotyphla', 'Lagomorpha', 'Metatheria', 
@@ -172,6 +218,21 @@ def count_mapped_orthologs(file_paths):
 
 # # Download alignment files
 # all_downloaded_alignment_files = download_files(species_directories, 'proteinAlignments.fa.gz')
+
+# Filter protein sequences longer than 1000 AA, remove them
+filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
+
+# Count the number of mapped orthologs for all species to humans
+all_mapped_ortholog_df = count_mapped_orthologs(filtered_files)
+
+MAX_NUMBER_ORTHOLOGS = 20
+n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
+n_alignments = n_alignments[(n_alignments > 0).all(axis=1)]
+proteins_to_keep = set(n_alignments.index[(n_alignments < MAX_NUMBER_ORTHOLOGS).all(axis=1)])
+# Remove proteins with more than 20 orthologs in any species
+refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
+
+
 
 # # Filter long protein sequences, remove them
 # filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
