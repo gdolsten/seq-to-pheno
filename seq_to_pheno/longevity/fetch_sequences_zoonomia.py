@@ -3,6 +3,13 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import os
 import  gzip
+import pandas as pd
+from huggingface_hub import HfApi
+# from seq_to_pheno.hug.utils import DatasetCard, DatasetPusher
+import sys
+sys.path.append('C:/Users/MeMyself/seq-to-pheno/seq_to_pheno/hug')
+from utils import DatasetCard, DatasetPusher
+from typing import Optional
 
 def fetch_directory_listing(url, animal_families):
     """Fetch and parse directory listing from a URL."""
@@ -200,17 +207,17 @@ def filter_multimap_protein_sequences(file_paths, proteins_to_keep):
 refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
 
 
-ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulipotyphla', 'Lagomorpha', 'Metatheria', 
-                'Perissodactyla', 'Pholidota', 'Primates', 'Prototheria', 'Rodentia', 'Ruminantia', 'Scandentia', 
-                'Suina', 'Tylopoda', 'Whippomorpha', 'Xenarthra']
+# ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulipotyphla', 'Lagomorpha', 'Metatheria', 
+#                 'Perissodactyla', 'Pholidota', 'Primates', 'Prototheria', 'Rodentia', 'Ruminantia', 'Scandentia', 
+#                 'Suina', 'Tylopoda', 'Whippomorpha', 'Xenarthra']
 
-BASE_URL = "http://genome.senckenberg.de/download/TOGA/human_hg38_reference/"
+# BASE_URL = "http://genome.senckenberg.de/download/TOGA/human_hg38_reference/"
 
-# Fetch all the species
-species_directories = fetch_directory_listing(BASE_URL, ANIMAL_FAMILIES)
+# # Fetch all the species
+# species_directories = fetch_directory_listing(BASE_URL, ANIMAL_FAMILIES)
 
-# Download alignment files
-all_downloaded_alignment_files = download_files(species_directories, 'proteinAlignments.fa.gz')
+# # Download alignment files
+# all_downloaded_alignment_files = download_files(species_directories, 'proteinAlignments.fa.gz')
 
 # Filter protein sequences longer than 1000 AA, remove them
 filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
@@ -227,8 +234,15 @@ refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to
 
 
 
+# # Filter long protein sequences, remove them
+# filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
 
-print((n_alignments > 0).sum(axis=1).sort_values(ascending=False))
+# # Count the number of mapped orthologs for all species to humans
+# all_mapped_ortholog_df = count_mapped_orthologs(filtered_files, max_length=1000)
+
+# n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
+
+# print((n_alignments > 0).sum(axis=1).sort_values(ascending=False))
 
 
 # import pandas as pd
@@ -311,3 +325,96 @@ def fetch_sequences_from_file(file_path, protein_name):
     else:
         return None
 
+
+# Hugging Face dataset creation class
+class DatasetPusher:
+    def __init__(self, folder: str, name: str, token: Optional[str] = None):
+        self.folder = folder
+        self.name = name
+        self.token = token or os.environ.get("HF_TOKEN")
+        if not self.token:
+            raise ValueError("Hugging Face token is required. Set it as an environment variable HF_TOKEN or pass it to the constructor.")
+        self.api = HfApi()
+
+    def push_to_hub(self):
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        repo_name = f"{self.name}-{current_time}"
+
+        try:
+            self.api.repo_info(repo_id=repo_name, repo_type="dataset")
+            print(f"Repository {repo_name} already exists. Pushing to existing repository.")
+        except Exception:
+            self.api.create_repo(repo_id=repo_name, repo_type="dataset", private=False)
+            print(f"Created new repository: {repo_name}")
+
+        local_dir = f"./temp_{repo_name}"
+        repo = Repository(local_dir=local_dir, clone_from=f"{self.api.whoami()['name']}/{repo_name}", repo_type="dataset", use_auth_token=self.token)
+
+        for root, _, files in os.walk(self.folder):
+            for file in files:
+                src_path = os.path.join(root, file)
+                dst_path = os.path.join(local_dir, os.path.relpath(src_path, self.folder))
+                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                with open(src_path, "rb") as src, open(dst_path, "wb") as dst:
+                    dst.write(src.read())
+
+        repo.git_add()
+        repo.git_commit("Initial commit")
+        repo.git_push()
+
+        print(f"Successfully pushed dataset to https://huggingface.co/datasets/{self.api.whoami()['name']}/{repo_name}")
+
+        repo.delete_repo()
+        print("Cleaned up local repository.")
+
+if __name__ == "__main__":
+    ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulipotyphla', 'Lagomorpha', 'Metatheria', 
+                    'Perissodactyla', 'Pholidota', 'Primates', 'Prototheria', 'Rodentia', 'Ruminantia', 'Scandentia', 
+                    'Suina', 'Tylopoda', 'Whippomorpha', 'Xenarthra']
+
+    BASE_URL = "http://genome.senckenberg.de/download/TOGA/human_hg38_reference/"
+
+    # Fetch all the species
+    species_directories = fetch_directory_listing(BASE_URL, ANIMAL_FAMILIES)
+
+    # Download alignment files
+    all_downloaded_alignment_files = download_files(species_directories, 'proteinAlignments.fa.gz')
+
+    # Filter long protein sequences, remove them
+    filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
+
+    # Count the number of mapped orthologs for all species to humans
+    all_mapped_ortholog_df = count_mapped_orthologs(filtered_files)
+
+    # Save the DataFrame to a CSV file
+    output_folder = "zoonomia_dataset"
+    os.makedirs(output_folder, exist_ok=True)
+    output_file = os.path.join(output_folder, "mapped_orthologs.csv")
+    all_mapped_ortholog_df.to_csv(output_file, index=False)
+
+    # Prepare dataset card data
+    dataset_size = os.path.getsize(output_file)
+    num_examples = len(all_mapped_ortholog_df)
+
+    card_data = {
+        "license": "CC-BY-4.0",
+        "size_category": "100M<n<1G" if dataset_size < 1e9 else "1G<n<10G",
+        "task_category": "other",
+        "pretty_name": "ZoonomiaOrthologs",
+        "num_bytes": dataset_size,
+        "num_examples": num_examples,
+        "download_size": dataset_size,
+        "dataset_size": dataset_size,
+        "data_file_path": "mapped_orthologs.csv"
+    }
+
+    # Create dataset card
+    template_path = "seq_to_pheno/hug/zoonomia_dataset_repo_template/README.md"
+    dataset_card = DatasetCard(template_path)
+    #token=os.environ.get("HF_TOKEN")
+    token = "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"
+    # Create and push the dataset to Hugging Face Hub
+    pusher = DatasetPusher(folder=output_folder, name="zoonomia-orthologs", token=os.environ.get("HF_TOKEN"))
+    pusher.push_to_hub(dataset_card, card_data)
+
+    print("Dataset creation and push to Hugging Face Hub completed.")
