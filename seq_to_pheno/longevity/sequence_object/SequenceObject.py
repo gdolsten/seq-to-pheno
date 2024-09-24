@@ -1,4 +1,7 @@
 import pandas as pd
+import os
+import numpy as np
+
 class SpeciesSequenceObject():
     def load(file_path):
         SpeciesSequenceObject(pd.read_csv(file_path, sep='\t', index_col=[0, 1, 2]))
