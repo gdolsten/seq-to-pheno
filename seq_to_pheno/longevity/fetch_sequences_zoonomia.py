@@ -204,33 +204,33 @@ def filter_multimap_protein_sequences(file_paths, proteins_to_keep):
         print(f"Success: {success}, Failure: {failure}; {success/(success+failure):.2f} success rate")
     return output_files
 
-refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
+# refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
 
 
-# ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulipotyphla', 'Lagomorpha', 'Metatheria', 
-#                 'Perissodactyla', 'Pholidota', 'Primates', 'Prototheria', 'Rodentia', 'Ruminantia', 'Scandentia', 
-#                 'Suina', 'Tylopoda', 'Whippomorpha', 'Xenarthra']
+# # ANIMAL_FAMILIES = ['Afrotheria', 'Carnivora', 'Chiroptera', 'Dermoptera', 'Eulipotyphla', 'Lagomorpha', 'Metatheria', 
+# #                 'Perissodactyla', 'Pholidota', 'Primates', 'Prototheria', 'Rodentia', 'Ruminantia', 'Scandentia', 
+# #                 'Suina', 'Tylopoda', 'Whippomorpha', 'Xenarthra']
 
-# BASE_URL = "http://genome.senckenberg.de/download/TOGA/human_hg38_reference/"
+# # BASE_URL = "http://genome.senckenberg.de/download/TOGA/human_hg38_reference/"
 
-# # Fetch all the species
-# species_directories = fetch_directory_listing(BASE_URL, ANIMAL_FAMILIES)
+# # # Fetch all the species
+# # species_directories = fetch_directory_listing(BASE_URL, ANIMAL_FAMILIES)
 
-# # Download alignment files
-# all_downloaded_alignment_files = download_files(species_directories, 'proteinAlignments.fa.gz')
+# # # Download alignment files
+# # all_downloaded_alignment_files = download_files(species_directories, 'proteinAlignments.fa.gz')
 
-# Filter protein sequences longer than 1000 AA, remove them
-filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
+# # Filter protein sequences longer than 1000 AA, remove them
+# filtered_files = filter_long_protein_sequences(all_downloaded_alignment_files, max_length=1000)
 
-# Count the number of mapped orthologs for all species to humans
-all_mapped_ortholog_df = count_mapped_orthologs(filtered_files)
+# # Count the number of mapped orthologs for all species to humans
+# all_mapped_ortholog_df = count_mapped_orthologs(filtered_files)
 
-MAX_NUMBER_ORTHOLOGS = 20
-n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
-n_alignments = n_alignments[(n_alignments > 0).all(axis=1)]
-proteins_to_keep = set(n_alignments.index[(n_alignments < MAX_NUMBER_ORTHOLOGS).all(axis=1)])
-# Remove proteins with more than 20 orthologs in any species
-refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
+# MAX_NUMBER_ORTHOLOGS = 20
+# n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
+# n_alignments = n_alignments[(n_alignments > 0).all(axis=1)]
+# proteins_to_keep = set(n_alignments.index[(n_alignments < MAX_NUMBER_ORTHOLOGS).all(axis=1)])
+# # Remove proteins with more than 20 orthologs in any species
+# refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
 
 
 
@@ -386,15 +386,25 @@ if __name__ == "__main__":
     # Count the number of mapped orthologs for all species to humans
     all_mapped_ortholog_df = count_mapped_orthologs(filtered_files)
 
-    # Save the DataFrame to a CSV file
-    output_folder = "zoonomia_dataset"
+    # Remove proteins with more than 20 orthologs in any species
+    MAX_NUMBER_ORTHOLOGS = 20
+    n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
+    n_alignments = n_alignments[(n_alignments > 0).all(axis=1)]
+    proteins_to_keep = set(n_alignments.index[(n_alignments < MAX_NUMBER_ORTHOLOGS).all(axis=1)])
+
+    refiltered_files = filter_multimap_protein_sequences(filtered_files, proteins_to_keep)
+
+    # Count the number of mapped orthologs for all species to humans after filtering
+    filtered_mapped_ortholog_df = count_mapped_orthologs(refiltered_files)
+    # Save the filtered DataFrame to a CSV file
+    output_folder = "filtered_zoonomia_dataset"
     os.makedirs(output_folder, exist_ok=True)
-    output_file = os.path.join(output_folder, "mapped_orthologs.csv")
-    all_mapped_ortholog_df.to_csv(output_file, index=False)
+    output_file = os.path.join(output_folder, "filtered_mapped_orthologs.csv")
+    filtered_mapped_ortholog_df.to_csv(output_file, index=False)
 
     # Prepare dataset card data
     dataset_size = os.path.getsize(output_file)
-    num_examples = len(all_mapped_ortholog_df)
+    num_examples = len(filtered_mapped_ortholog_df)
 
     card_data = {
         "license": "CC-BY-4.0",
@@ -411,10 +421,30 @@ if __name__ == "__main__":
     # Create dataset card
     template_path = "seq_to_pheno/hug/zoonomia_dataset_repo_template/README.md"
     dataset_card = DatasetCard(template_path)
+    # Update the dataset card with filtering information
+    # dataset_card.add_section("Filtering Details", f"""
+    # This dataset has been filtered to remove:
+    # 1. Proteins longer than 1000 amino acids
+    # 2. Proteins with more than {MAX_NUMBER_ORTHOLOGS} orthologs in any species
+
+    # Original number of mapped orthologs: {len(all_mapped_ortholog_df)}
+    # Filtered number of mapped orthologs: {num_examples}
+    # """)
     #token=os.environ.get("HF_TOKEN")
     token = "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"
     # Create and push the dataset to Hugging Face Hub
-    pusher = DatasetPusher(folder=output_folder, name="zoonomia-orthologs", token=os.environ.get("HF_TOKEN"))
+    # Create and push the dataset to Hugging Face Hub
+    # token = os.environ.get("HF_TOKEN")
+    if not token:
+        raise ValueError("Hugging Face token is required. Set it as an environment variable HF_TOKEN.")
+
+    pusher = DatasetPusher(folder=output_folder, name="filtered-zoonomia-orthologs", token=token)
     pusher.push_to_hub(dataset_card, card_data)
 
-    print("Dataset creation and push to Hugging Face Hub completed.")
+    print("Filtered dataset creation and push to Hugging Face Hub completed.")
+
+    # Clean up temporary files
+    for file in all_downloaded_alignment_files + filtered_files + refiltered_files:
+        os.remove(file)
+    print("Temporary files cleaned up.")
+    
