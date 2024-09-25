@@ -388,6 +388,8 @@ if __name__ == "__main__":
 
     # Remove proteins with more than 20 orthologs in any species
     MAX_NUMBER_ORTHOLOGS = 20
+
+    
     n_alignments = all_mapped_ortholog_df.value_counts(['protein', 'species']).unstack()
     n_alignments = n_alignments[(n_alignments > 0).all(axis=1)]
     proteins_to_keep = set(n_alignments.index[(n_alignments < MAX_NUMBER_ORTHOLOGS).all(axis=1)])
