@@ -1,0 +1,72 @@
+# Python-specific ignores
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.log
+*.tmp
+
+# Virtual environment folders
+env/
+venv/
+.venv/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints
+
+# VS Code files
+.vscode/
+*.code-workspace
+
+# PyCharm files
+.idea/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore data and downloads
+filtered_zoonomia_dataset/
+downloads/
+seq_to_pheno/hug/__pycache__/
+seq_to_pheno/longevity/downloads/
+seq_to_pheno/longevity/fetch_sequences_zoonomiatonic.py
+seq_to_pheno/longevity/data/zoonomia/protein_sequence_df/
+seq_to_pheno/longevity/sequence_object/__pycache__/
+
+# Ignore large files or specific logs
+*.csv
+*.tsv
+*.json
+*.h5
+*.hdf5
+*.db
+*.sqlite3
+*.pkl
+*.pickle
+
+# Ignore temporary and backup files
+*.bak
+*.swp
+*.swo
+*.tmp
+
+# Ignore compressed files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.bz2
+
+# Ignore output from specific scripts (if applicable)
+output/
+results/
+
+# Ignore TensorBoard logs (if used)
+logs/
+events.out.tfevents.*
