@@ -76,14 +76,18 @@ class SpeciesSequenceObject():
         Returns:
         str: A string containing the sequences in FASTA format.
         """
+        all_fastq_headers = []
         fastq = ""
         if protein_subset:
-            data = self.select(protein_subset)
+            print("BAD - SHOULD DROP NA EARLIER!!!")
+            data = self.select(protein_subset).dropna(axis=0)
         else:
-            data = self.results_df
-        for _, row in data.reset_index().iterrows():
-            fastq += f">{row.organism_name}.{row.protein_name}.{row.quer_transcript}\n{row.sequence}\n"
-
+            print("BAD - SHOULD DROP NA EARLIER!!!")
+            data = self.results_df.dropna(axis=0)
+        for c, (_, row) in enumerate(data.reset_index().iterrows()):
+            fastq += f">{row.organism_name}.{row.Species}.{row.protein_name}.{row.quer_transcript}.{c}\n{row.sequence}\n"
+            all_fastq_headers.append(f"{row.organism_name}.{row.Species}.{row.protein_name}.{row.quer_transcript}")
+        print(pd.Series(all_fastq_headers).value_counts())
         with open(basedir + '/' + file_path, 'w') as file:
             file.write(fastq)
         return None
