@@ -36,6 +36,8 @@ downloads/
 seq_to_pheno/hug/__pycache__/
 seq_to_pheno/longevity/downloads/
 seq_to_pheno/longevity/fetch_sequences_zoonomiatonic.py
+seq_to_pheno/longevity/data/zoonomia/protein_sequence_df/
+seq_to_pheno/longevity/sequence_object/__pycache__/
 
 # Ignore large files or specific logs
 *.csv
