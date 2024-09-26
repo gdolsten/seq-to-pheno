@@ -41,10 +41,66 @@ When thinking about linking transcriptomics data to longevity we have many field
 
 **Example:**
 ```
-➜ head -5 rnaseq.extended.metadata.aliquot_id.V4.tsv | cut -f1,3,76,48 
-aliquot_id      project_code    donor_survival_time     GTex.tissue
-b337121c-9821-4644-820e-b8c477f6c38a    GBM-US  489     Brain
-612ef912-5a28-4c11-8703-3376f51afef5    GBM-US  317     Brain
-56a705f4-fd28-44ff-8a3c-85bc4300c760    GBM-US  737     Brain
-28239a0e-9990-49ef-a159-ba63fb078c77    GBM-US  485     Brain
+➜ head -5 rnaseq.extended.metadata.aliquot_id.V4.tsv | cut -f1,3,75,76,48 
+aliquot_id      project_code    donor_survival_time     wgs_aliquot_id  GTex.tissue
+b337121c-9821-4644-820e-b8c477f6c38a    GBM-US  489     d60f54f5-b154-42c4-99fb-cea4e7a33dc7    Brain
+612ef912-5a28-4c11-8703-3376f51afef5    GBM-US  317     c065761d-f775-457f-bda0-4c7c257a701e    Brain
+56a705f4-fd28-44ff-8a3c-85bc4300c760    GBM-US  737     56ffaa35-814c-4c0b-b3c6-d4514d34fec2    Brain
+28239a0e-9990-49ef-a159-ba63fb078c77    GBM-US  485     7cae6c0b-36fe-411b-bbba-093a4c846d84    Brain
 ```
+
+**Get Linked SNV and Indel Data**
+
+The ICGC data collection also provides VCF files for indels and SNVs (single nucleotide variants)
+
+```
+aws s3 cp s3://icgc25k-open/PCAWG/consensus_snv_indel/final_consensus_snv_indel_passonly_icgc.public.tgz --endpoint-url https://object.genomeinformatics.org --no-sign-request ./
+
+tar -zxvf final_consensus_snv_indel_passonly_icgc.public.tgz
+```
+
+The extracted tar.gz file gives us two separate directories for SNVs and Indels:
+
+```
+indel/
+snv_mnv/
+```
+
+Here is a sneak-peak inside the snv_mv directory:
+
+```
+➜ ls snv_mnv | head
+0009b464-b376-4fbc-8a56-da538269a02f.consensus.20160830.somatic.snv_mnv.vcf.gz 
+0009b464-b376-4fbc-8a56-da538269a02f.consensus.20160830.somatic.snv_mnv.vcf.gz.tbi 
+003819bc-c415-4e76-887c-931d60ed39e7.consensus.20160830.somatic.snv_mnv.vcf.gz 
+003819bc-c415-4e76-887c-931d60ed39e7.consensus.20160830.somatic.snv_mnv.vcf.gz.tbi 
+```
+
+The prefix for each of these files corresponds to the wgs_aliquot_id from the metadata file. Meaning we can link our transcripts data to genotype data.
+
+And here's a look at the format of one of these VCF files (after decompression):
+
+```
+#CHROM  POS ID  REF ALT QUAL    FILTER  INFO
+1   1002242 .   C   T   .   .   Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.5;cosmic=COSN8882299;t_alt_count=14;t_ref_count=14;Variant_Classification=RNA
+1   4400126 .   C   T   .   .   1000genomes_AF=0.00019968;1000genomes_ID=rs188587967;Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.2;cosmic=COSN8470412;dbsnp=rs188587967;t_alt_count=6;t_ref_count=24;Variant_Classification=IGR
+1   6544147 .   C   T   .   .   Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.3514;cosmic=COSN8504060;t_alt_count=13;t_ref_count=24;Variant_Classification=Intron
+1   6999251 .   G   A   .   .   Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.5455;cosmic=COSN8505688;t_alt_count=18;t_ref_count=15;Variant_Classification=Intron
+1   7043470 .   C   G   .   .   Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.4643;cosmic=COSN8505922;repeat_masker=L2c;t_alt_count=13;t_ref_count=15;Variant_Classification=Intron
+1   7947718 .   C   T   .   .   Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.9048;cosmic=COSN8510046;repeat_masker=AluJb;t_alt_count=19;t_ref_count=2;Variant_Classification=IGR
+1   9585830 .   G   A   .   .   Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.5172;cosmic=COSN8522351;repeat_masker=LTR2;t_alt_count=15;t_ref_count=14;Variant_Classification=IGR
+```
+
+What we see here is information about the location of variants found in this subject, along with relevant information like alt_count and ref_count (which can be used to define allele depth and genotypes), as well as information related to the Variant_Classification, and the type of sequencing used to generate the data.
+
+### Mapping to transcripts
+The next import step is to map the transcript expression data to the variant calls we have for each sample. 
+
+I've created a script called **set_tcga_data.py** that should set up everything described above while also doing some work to aggregate variants across each transcript and subject. 
+
+The table you get at the end:
+- **variant_counts_per_transcript.tsv**
+
+ This should be similar to the ICGC transcript expression table -- where the first column has the Ensembl transcript_id, and each column after will correspond to each of our samples from the metadata.
+
+The cell values are the total variant count found for each transcript's genomic locus and for each subject. 
