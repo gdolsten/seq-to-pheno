@@ -236,12 +236,12 @@ def main():
     os.makedirs(VARIANT_DIR, exist_ok=True)
 
     # Download files
-    # download_file(TRANSCRIPT_DATA_S3, DATA_DIR, ENDPOINT_URL)
-    # download_file(METADATA_S3, DATA_DIR, ENDPOINT_URL)
-    # download_file(SNV_INDEL_S3, DATA_DIR, ENDPOINT_URL)
+    download_file(TRANSCRIPT_DATA_S3, DATA_DIR, ENDPOINT_URL)
+    download_file(METADATA_S3, DATA_DIR, ENDPOINT_URL)
+    download_file(SNV_INDEL_S3, DATA_DIR, ENDPOINT_URL)
 
     # Extract SNV and Indel data
-    # extract_tar_gz(os.path.join(DATA_DIR, 'final_consensus_snv_indel_passonly_icgc.public.tgz'), VARIANT_DIR)
+    extract_tar_gz(os.path.join(DATA_DIR, 'final_consensus_snv_indel_passonly_icgc.public.tgz'), VARIANT_DIR)
 
     # Paths to variant directories
     indel_dir = os.path.join(VARIANT_DIR, 'indel')
