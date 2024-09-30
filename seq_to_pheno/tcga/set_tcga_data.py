@@ -9,7 +9,8 @@ import pysam
 from intervaltree import IntervalTree
 import glob
 import sys
-
+import requests
+from Bio.Seq import Seq
 
 
 # Configure logging
@@ -389,6 +390,7 @@ def main():
     variant_counts_file = os.path.join(DATA_DIR, 'variant_counts_per_transcript.tsv')
     variant_counts_df.to_csv(variant_counts_file, sep='\t', header=True)
     logging.info(f"Variant counts per transcript saved to {variant_counts_file}")
+
 
 if __name__ == '__main__':
     main()
