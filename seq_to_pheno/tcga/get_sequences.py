@@ -4,14 +4,21 @@ import re
 import os
 import time
 import logging
+import pickle
 from Bio.Seq import Seq
+from concurrent.futures import ProcessPoolExecutor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 # Initialize a cache for CDS sequences
-transcript_cds_cache = {}
+if os.path.exists('cds_cache.pkl'):
+    with open('cds_cache.pkl', 'rb') as f:
+        transcript_cds_cache = pickle.load(f)
+else:
+    transcript_cds_cache = {}
 
+session = requests.Session()
 
 def fetch_transcript_cds(transcript_id):
     if transcript_id in transcript_cds_cache:
@@ -20,22 +27,31 @@ def fetch_transcript_cds(transcript_id):
     ext = f"/sequence/id/{transcript_id}?type=cds"
     headers = {"Content-Type": "text/plain"}
 
-    while True:
-        response = requests.get(server + ext, headers=headers)
-        if response.status_code == 429:
-            # Too Many Requests, wait and retry
-            retry_after = int(response.headers.get("Retry-After", 1))
-            logging.warning(f"Rate limit exceeded. Retrying after {retry_after} seconds.")
-            time.sleep(retry_after)
+    retries = 5
+    backoff_factor = 1
+    for attempt in range(retries):
+        try:
+            response = session.get(server + ext, headers=headers)
+            if response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", backoff_factor))
+                logging.warning(f"Rate limit exceeded. Retrying after {retry_after} seconds.")
+                time.sleep(retry_after)
+                backoff_factor *= 2
+                continue
+            elif not response.ok:
+                logging.error(f"Error fetching CDS for {transcript_id}: {response.text}")
+                return None
+            else:
+                sequence = response.text
+                transcript_cds_cache[transcript_id] = sequence
+                return sequence
+        except requests.exceptions.RequestException as e:
+            logging.error(f"RequestException fetching CDS for {transcript_id}: {e}")
+            time.sleep(backoff_factor)
+            backoff_factor *= 2
             continue
-        elif not response.ok:
-            logging.error(f"Error fetching CDS for {transcript_id}: {response.text}")
-            return None
-        else:
-            sequence = response.text
-            transcript_cds_cache[transcript_id] = sequence
-            return sequence
-
+    logging.error(f"Failed to fetch CDS for {transcript_id} after {retries} attempts.")
+    return None
 
 def apply_variant_to_cds(sequence, hgvs_c):
     """
@@ -199,7 +215,6 @@ def translate_cds_to_protein(cds_sequence):
 
     return str(protein_sequence)
 
-
 def save_protein_sequence_to_fasta(sequence, protein_id, output_file):
     with open(output_file, 'w') as f:
         f.write(f">{protein_id}\n")
@@ -207,8 +222,20 @@ def save_protein_sequence_to_fasta(sequence, protein_id, output_file):
         for i in range(0, len(sequence), 60):
             f.write(sequence[i:i+60] + '\n')
 
+def process_sample(args):
+    vcf_file, output_dir, sample_id = args
+    process_vcf(vcf_file, output_dir, sample_id)
 
-def process_vcf(vcf_file, output_dir):
+def process_vcf_directory(vcf_dir, output_dir):
+    tasks = []
+    for filename in os.listdir(vcf_dir):
+        if filename.endswith('.vcf') or filename.endswith('.vcf.gz'):
+            sample_id = filename.replace('.combined.vcf', '').replace('.vcf', '').replace('.gz', '')
+            vcf_file = os.path.join(vcf_dir, filename)
+            tasks.append((vcf_file, output_dir, sample_id))
+    return tasks
+
+def process_vcf(vcf_file, output_dir, sample_id):
     vcf_in = pysam.VariantFile(vcf_file)
     transcript_variants = {}
     failed_variants = []
@@ -270,16 +297,24 @@ def process_vcf(vcf_file, output_dir):
             continue
 
         # Sort variants by cDNA position (descending)
-        try:
-            variants.sort(key=lambda x: int(re.match(r'c\.(\d+)', x[0]).group(1)), reverse=True)
-        except Exception as e:
-            logging.error(f"Error sorting variants for transcript {transcript_id}: {e}")
-            continue
+        def extract_cdna_position(hgvs_c):
+            match = re.match(r'c\.([\d+]+)', hgvs_c)
+            if match:
+                return int(match.group(1))
+            else:
+                logging.warning(f"Could not extract cDNA position from {hgvs_c}")
+                return float('inf')
+
+        variants.sort(key=lambda x: extract_cdna_position(x[0]), reverse=True)
 
         mutated_cds_sequence = cds_sequence
         for hgvs_c, _ in variants:
             try:
                 mutated_cds_sequence = apply_variant_to_cds(mutated_cds_sequence, hgvs_c)
+            except NotImplementedError as e:
+                logging.warning(f"Variant not implemented {hgvs_c} for transcript {transcript_id}: {e}")
+                failed_variants.append((transcript_id, hgvs_c, str(e)))
+                continue
             except Exception as e:
                 logging.error(f"Error applying variant {hgvs_c} to transcript {transcript_id}: {e}")
                 failed_variants.append((transcript_id, hgvs_c, str(e)))
@@ -289,23 +324,41 @@ def process_vcf(vcf_file, output_dir):
         protein_sequence = translate_cds_to_protein(mutated_cds_sequence)
 
         # Save the mutated protein sequence to a FASTA file
-        protein_id = f"{transcript_id}_mutated"
+        protein_id = f"{sample_id}_{transcript_id}_mutated"
         output_file = os.path.join(output_dir, f"{protein_id}.fasta")
         save_protein_sequence_to_fasta(protein_sequence, protein_id, output_file)
         logging.info(f"Saved mutated protein sequence for {transcript_id} to {output_file}")
 
     # Optionally, write failed variants to a log file
     if failed_variants:
-        failed_variants_file = os.path.join(output_dir, 'failed_variants.log')
+        failed_variants_file = os.path.join(output_dir, f'{sample_id}_failed_variants.log')
         with open(failed_variants_file, 'w') as f:
             for transcript_id, hgvs_c, error_msg in failed_variants:
                 f.write(f"{transcript_id}\t{hgvs_c}\t{error_msg}\n")
         logging.info(f"Failed variants logged to {failed_variants_file}")
 
+    # Save the updated CDS cache
+    with open('cds_cache.pkl', 'wb') as f:
+        pickle.dump(transcript_cds_cache, f)
 
-# Example usage
-vcf_file = 'tcga/data/variants/snv_mnv/d8c2b4b2-e12b-43d2-bafc-87b29f027797.consensus.20160830.somatic.snv_mnv.annotated.vcf'
-output_dir = 'tcga/data/variants/snv_mnv/mutated_transcripts'
-os.makedirs(output_dir, exist_ok=True)
+if __name__ == '__main__':
+    # Load cache from file if exists
+    if os.path.exists('cds_cache.pkl'):
+        with open('cds_cache.pkl', 'rb') as f:
+            transcript_cds_cache = pickle.load(f)
+    else:
+        transcript_cds_cache = {}
 
-process_vcf(vcf_file, output_dir)
+    vcf_dir = 'seq_to_pheno/tcga/data/variants/vcf'
+    output_dir = 'seq_to_pheno/tcga/data/variants/mutated_proteins'
+    os.makedirs(output_dir, exist_ok=True)
+
+    tasks = process_vcf_directory(vcf_dir, output_dir)
+
+    # Start the multiprocessing executor
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        executor.map(process_sample, tasks)
+
+    # Save the updated CDS cache
+    with open('cds_cache.pkl', 'wb') as f:
+        pickle.dump(transcript_cds_cache, f)
