@@ -8,6 +8,9 @@ from collections import defaultdict
 import pysam
 from intervaltree import IntervalTree
 import glob
+import sys
+import requests
+from Bio.Seq import Seq
 
 
 # Configure logging
@@ -106,6 +109,9 @@ def parse_gtf(gtf_file: str) -> pd.DataFrame:
             if fields[2] != 'transcript':
                 continue
             chrom = fields[0]
+            # Remove 'chr' prefix if present
+            if chrom.startswith('chr'):
+                chrom = chrom[3:]
             start = int(fields[3])
             end = int(fields[4])
             strand = fields[6]
@@ -121,8 +127,7 @@ def parse_gtf(gtf_file: str) -> pd.DataFrame:
                     'strand': strand
                 })
     return pd.DataFrame(transcripts)
-
-
+  
 def build_interval_tree(transcript_df: pd.DataFrame) -> dict:
     """
     Builds an interval tree for each chromosome from the transcript DataFrame.
@@ -139,31 +144,142 @@ def build_interval_tree(transcript_df: pd.DataFrame) -> dict:
         interval_trees[chrom].addi(row['start'], row['end'], row['transcript_id'])
     return interval_trees
 
-def count_variants_in_transcripts(vcf_file: str, interval_trees: dict) -> dict:
+def annotate_vcf(input_vcf: str, output_vcf: str, snpeff_jar: str, genome_version: str = 'GRCh37.75') -> None:
     """
-    Counts the number of variants overlapping each transcript in a VCF file.
+    Annotates a VCF file using SnpEff.
 
     Parameters:
-        vcf_file (str): Path to the VCF file.
-        interval_trees (dict): Interval trees for each chromosome.
+        input_vcf (str): Path to the input VCF file.
+        output_vcf (str): Path to the output annotated VCF file.
+        snpeff_jar (str): Path to the snpEff.jar file.
+        genome_version (str): Genome version to use for annotation.
 
     Returns:
-        dict: A dictionary with transcript IDs as keys and variant counts as values.
+        None
+    """
+    try:
+        command = [
+            'java', '-Xmx4g', '-jar', snpeff_jar,
+            '-v', genome_version,
+            '-noLog',
+            input_vcf
+        ]
+        logging.info(f"Annotating VCF file {input_vcf}")
+        with open(output_vcf, 'w') as outfile:
+            subprocess.run(command, stdout=outfile, stderr=subprocess.PIPE, check=True)
+        logging.info(f"Annotated VCF saved to {output_vcf}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error annotating VCF file {input_vcf}: {e.stderr.decode().strip()}")
+
+def count_variants_in_transcripts(vcf_file: str, interval_trees: dict) -> dict:
+    """
+    Counts the number of impactful variants overlapping each transcript in a VCF file.
     """
     variant_counts = defaultdict(int)
-    vcf = pysam.VariantFile(vcf_file)
+    try:
+        # Suppress warnings from pysam/htslib
+        save_stderr = sys.stderr
+        sys.stderr = open(os.devnull, 'w')
+
+        vcf = pysam.VariantFile(vcf_file)
+
+        # Restore stderr
+        sys.stderr.close()
+        sys.stderr = save_stderr
+    except Exception as e:
+        logging.error(f"Failed to open VCF file {vcf_file}: {e}")
+        return variant_counts
+
     for record in vcf:
         chrom = record.chrom
+        # Remove 'chr' prefix if present
+        if chrom.startswith('chr'):
+            chrom = chrom[3:]
         pos = record.pos
         if chrom not in interval_trees:
             continue
         overlaps = interval_trees[chrom][pos]
-        for overlap in overlaps:
-            transcript_id = overlap.data
-            variant_counts[transcript_id] += 1
+        if not overlaps:
+            continue
+
+        # Parse the ANN field
+        ann_field = record.info.get('ANN')
+        if ann_field:
+            for ann in ann_field:
+                ann_parts = ann.split('|')
+                # ANN fields are as follows:
+                # Allele | Annotation | Annotation_Impact | Gene_Name | Gene_ID | Feature_Type | Feature_ID | Transcript_BioType | Rank | HGVS.c | HGVS.p | cDNA.pos / cDNA.length | CDS.pos / CDS.length | AA.pos / AA.length | Distance | ERRORS / WARNINGS / INFO
+
+                # We need Feature_ID (which is the transcript ID) and the Impact
+                impact = ann_parts[2]
+                feature_id = ann_parts[6]
+
+                # Check if the feature_id matches any of our transcripts
+                if feature_id in [interval.data for interval in overlaps]:
+                    # Optionally, filter by impact level
+                    if impact in ['HIGH', 'MODERATE']:
+                        variant_counts[feature_id] += 1
+        else:
+            # No annotation available, skip this variant
+            continue
     return variant_counts
 
-def process_all_samples(metadata_df: pd.DataFrame, interval_trees: dict, variant_dir: str) -> pd.DataFrame:
+def process_sample(args):
+    """
+    Processes a single sample to count variants per transcript.
+
+    Parameters:
+        args (tuple): A tuple containing sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar
+
+    Returns:
+        pd.DataFrame or None: DataFrame with transcript IDs as index and variant counts for this sample, or None if no data.
+    """
+    sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar = args
+    variant_counts = defaultdict(int)
+
+    # Paths to VCF files
+    snv_vcf_pattern = os.path.join(variant_dir, 'snv_mnv', f"{wgs_aliquot_id}.consensus.*.somatic.snv_mnv.vcf.gz")
+    indel_vcf_pattern = os.path.join(variant_dir, 'indel', f"{wgs_aliquot_id}.consensus.*.somatic.indel.vcf.gz")
+
+    # Find actual VCF files using glob
+    snv_vcf_files = glob.glob(snv_vcf_pattern)
+    indel_vcf_files = glob.glob(indel_vcf_pattern)
+
+    # Process SNV VCF
+    if snv_vcf_files:
+        snv_vcf = snv_vcf_files[0]
+        annotated_snv_vcf = snv_vcf.replace('.vcf.gz', '.annotated.vcf')
+        if not os.path.exists(annotated_snv_vcf):
+            annotate_vcf(snv_vcf, annotated_snv_vcf, snpeff_jar)
+        logging.info(f"Processing annotated SNV VCF for sample {sample_id}")
+        snv_counts = count_variants_in_transcripts(annotated_snv_vcf, interval_trees)
+        for k, v in snv_counts.items():
+            variant_counts[k] += v
+    else:
+        logging.warning(f"SNV VCF not found for sample {sample_id}")
+
+    # Process Indel VCF
+    if indel_vcf_files:
+        indel_vcf = indel_vcf_files[0]
+        annotated_indel_vcf = indel_vcf.replace('.vcf.gz', '.annotated.vcf')
+        if not os.path.exists(annotated_indel_vcf):
+            annotate_vcf(indel_vcf, annotated_indel_vcf, snpeff_jar)
+        logging.info(f"Processing annotated Indel VCF for sample {sample_id}")
+        indel_counts = count_variants_in_transcripts(annotated_indel_vcf, interval_trees)
+        for k, v in indel_counts.items():
+            variant_counts[k] += v
+    else:
+        logging.warning(f"Indel VCF not found for sample {sample_id}")
+
+    if variant_counts:
+        # Create DataFrame for this sample
+        df_sample = pd.DataFrame.from_dict(variant_counts, orient='index', columns=[sample_id])
+        return df_sample
+    else:
+        logging.warning(f"No variants found for sample {sample_id}")
+        return None
+
+def process_all_samples(metadata_df: pd.DataFrame, interval_trees: dict, variant_dir: str, snpeff_jar: str) -> pd.DataFrame:
     """
     Processes all samples to count variants per transcript.
 
@@ -171,54 +287,31 @@ def process_all_samples(metadata_df: pd.DataFrame, interval_trees: dict, variant
         metadata_df (pd.DataFrame): Metadata DataFrame with samples to process.
         interval_trees (dict): Interval trees of transcripts.
         variant_dir (str): Directory containing variant files.
+        snpeff_jar (str): Path to snpEff.jar file.
 
     Returns:
         pd.DataFrame: DataFrame with transcripts as rows and samples as columns.
     """
     data_frames = []
-    
     for idx, row in metadata_df.iterrows():
         sample_id = row['aliquot_id']
         wgs_aliquot_id = row['wgs_aliquot_id']
         logging.info(f"Processing sample {sample_id}")
-        
-        # Paths to VCF files
-        snv_vcf = os.path.join(variant_dir, 'snv_mnv', f"{wgs_aliquot_id}.consensus.*.somatic.snv_mnv.vcf.gz")
-        indel_vcf = os.path.join(variant_dir, 'indel', f"{wgs_aliquot_id}.consensus.*.somatic.indel.vcf.gz")
-        
-        variant_counts = defaultdict(int)
-        
-        # Process SNV VCF
-        if glob.glob(snv_vcf):
-            snv_vcf_file = glob.glob(snv_vcf)[0]
-            logging.info(f"Processing SNV VCF for sample {sample_id}")
-            snv_counts = count_variants_in_transcripts(snv_vcf_file, interval_trees)
-            for k, v in snv_counts.items():
-                variant_counts[k] += v
-        else:
-            logging.warning(f"SNV VCF not found for sample {sample_id}")
-        
-        # Process Indel VCF
-        if glob.glob(indel_vcf):
-            indel_vcf_file = glob.glob(indel_vcf)[0]
-            logging.info(f"Processing Indel VCF for sample {sample_id}")
-            indel_counts = count_variants_in_transcripts(indel_vcf_file, interval_trees)
-            for k, v in indel_counts.items():
-                variant_counts[k] += v
-        else:
-            logging.warning(f"Indel VCF not found for sample {sample_id}")
-        
-        # Create DataFrame for this sample
-        df_sample = pd.DataFrame.from_dict(variant_counts, orient='index', columns=[sample_id])
-        data_frames.append(df_sample)
-    
+        args = (sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar)
+        df_sample = process_sample(args)
+        if df_sample is not None:
+            data_frames.append(df_sample)
+
     # Concatenate all sample DataFrames
-    variant_counts_df = pd.concat(data_frames, axis=1)
-    # Fill missing values with 0
-    variant_counts_df = variant_counts_df.fillna(0).astype(int)
-    variant_counts_df.index.name = 'transcript_id'
-    variant_counts_df = variant_counts_df.sort_index()
-    
+    if data_frames:
+        variant_counts_df = pd.concat(data_frames, axis=1)
+        # Fill missing values with 0
+        variant_counts_df = variant_counts_df.fillna(0).astype(int)
+        variant_counts_df.index.name = 'transcript_id'
+        variant_counts_df = variant_counts_df.sort_index()
+    else:
+        variant_counts_df = pd.DataFrame()
+
     return variant_counts_df
 
 def main():
@@ -230,6 +323,8 @@ def main():
     TRANSCRIPT_DATA_S3 = 's3://icgc25k-open/PCAWG/transcriptome/transcript_expression/pcawg.rnaseq.transcript.expr.tpm.tsv.gz'
     METADATA_S3 = 's3://icgc25k-open/PCAWG/transcriptome/metadata/rnaseq.extended.metadata.aliquot_id.V4.tsv.gz'
     SNV_INDEL_S3 = 's3://icgc25k-open/PCAWG/consensus_snv_indel/final_consensus_snv_indel_passonly_icgc.public.tgz'
+    SNPEFF_JAR = '/Users/harrison.reed/snpEff/snpEff.jar'  # Update with the correct path to your snpEff.jar
+    GENOME_VERSION = 'GRCh37.75'      # Ensure this is the genome version you downloaded for snpEff
 
     # Create data directories if they don't exist
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -265,35 +360,37 @@ def main():
 
     # Save the updated metadata to a new file
     updated_metadata_file = os.path.join(DATA_DIR, 'metadata_with_consensus_data.tsv')
-    
+
     num_samples_with_data = metadata_df['has_consensus_data'].sum()
     logging.info(f"Number of samples with consensus data: {num_samples_with_data}")
-    
+
     # Filter metadata to include only samples with consensus data
-    metadata_df[metadata_df.has_consensus_data == True].to_csv(updated_metadata_file, sep='\t', index=False)
+    metadata_df = metadata_df[metadata_df.has_consensus_data == True]
+    metadata_df.to_csv(updated_metadata_file, sep='\t', index=False)
     logging.info(f"Updated metadata saved to {updated_metadata_file}")
-    
+
     # Load Ensembl GTF file
     gtf_file = os.path.join(DATA_DIR, 'Homo_sapiens.GRCh37.87.gtf.gz')
     if not os.path.exists(gtf_file):
         logging.info("Downloading Ensembl GTF file")
         gtf_url = 'ftp://ftp.ensembl.org/pub/grch37/release-87/gtf/homo_sapiens/Homo_sapiens.GRCh37.87.gtf.gz'
         download_file(gtf_url, DATA_DIR, '')
-    
+
     logging.info("Parsing GTF file to get transcript coordinates")
     transcript_df = parse_gtf(gtf_file)
-    
+
     logging.info("Building interval trees for transcripts")
     interval_trees = build_interval_tree(transcript_df)
-    
+
     # Process samples to get variant counts per transcript
     logging.info("Processing samples to count variants per transcript")
-    variant_counts_df = process_all_samples(metadata_df, interval_trees, VARIANT_DIR)
-    
+    variant_counts_df = process_all_samples(metadata_df, interval_trees, VARIANT_DIR, SNPEFF_JAR)
+
     # Save variant counts table
     variant_counts_file = os.path.join(DATA_DIR, 'variant_counts_per_transcript.tsv')
     variant_counts_df.to_csv(variant_counts_file, sep='\t', header=True)
     logging.info(f"Variant counts per transcript saved to {variant_counts_file}")
-    
+
+
 if __name__ == '__main__':
     main()
