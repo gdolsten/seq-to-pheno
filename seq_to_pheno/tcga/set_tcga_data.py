@@ -9,10 +9,9 @@ import pysam
 from intervaltree import IntervalTree
 import glob
 import sys
-import requests
-from Bio.Seq import Seq
-import datetime
 import shutil
+import concurrent.futures
+import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -340,13 +339,20 @@ def process_sample(args):
     Processes a single sample to count variants per transcript.
 
     Parameters:
-        args (tuple): A tuple containing sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar
+        args (tuple): A tuple containing sample_id, wgs_aliquot_id, variant_dir, snpeff_jar, reference_gtf
 
     Returns:
-        pd.DataFrame or None: DataFrame with transcript IDs as index and variant counts for this sample, or None if no data.
+        tuple: (sample_id, variant_counts_dict) or (sample_id, None) if no variants found.
     """
-    sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar = args
+    sample_id, wgs_aliquot_id, variant_dir, snpeff_jar, reference_gtf = args
     variant_counts = defaultdict(int)
+
+    # Initialize interval_trees
+    if 'interval_trees' not in globals():
+        global interval_trees
+        logging.info(f"Building interval trees in worker process for sample {sample_id}")
+        transcript_df = parse_gtf(reference_gtf)
+        interval_trees = build_interval_tree(transcript_df)
 
     # Paths to VCF files
     snv_vcf_pattern = os.path.join(variant_dir, 'snv_mnv', f"{wgs_aliquot_id}.consensus.*.somatic.snv_mnv.vcf.gz")
@@ -383,47 +389,56 @@ def process_sample(args):
         logging.warning(f"Indel VCF not found for sample {sample_id}")
 
     if variant_counts:
-        # Create DataFrame for this sample
-        df_sample = pd.DataFrame.from_dict(variant_counts, orient='index', columns=[sample_id])
-        return df_sample
+        return sample_id, dict(variant_counts)
     else:
         logging.warning(f"No variants found for sample {sample_id}")
-        return None
+        return sample_id, None
 
-def process_all_samples(metadata_df: pd.DataFrame, interval_trees: dict, variant_dir: str, snpeff_jar: str) -> pd.DataFrame:
-    """
-    Processes all samples to count variants per transcript.
 
-    Parameters:
-        metadata_df (pd.DataFrame): Metadata DataFrame with samples to process.
-        interval_trees (dict): Interval trees of transcripts.
-        variant_dir (str): Directory containing variant files.
-        snpeff_jar (str): Path to snpEff.jar file.
+def process_all_samples(metadata_df: pd.DataFrame, variant_dir: str, snpeff_jar: str, reference_gtf: str) -> pd.DataFrame:
+    '''
+    Processes all samples to count variants per transcript using parallel processing.
 
     Returns:
         pd.DataFrame: DataFrame with transcripts as rows and samples as columns.
-    """
-    data_frames = []
+    '''
+    args_list = []
     for idx, row in metadata_df.iterrows():
         sample_id = row['aliquot_id']
         wgs_aliquot_id = row['wgs_aliquot_id']
-        logging.info(f"Processing sample {sample_id}")
-        args = (sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar)
-        df_sample = process_sample(args)
-        if df_sample is not None:
-            data_frames.append(df_sample)
+        logging.info(f"Preparing to process sample {sample_id}")
+        args = (sample_id, wgs_aliquot_id, variant_dir, snpeff_jar, reference_gtf)
+        args_list.append(args)
 
-    # Concatenate all sample DataFrames
-    if data_frames:
-        variant_counts_df = pd.concat(data_frames, axis=1)
-        # Fill missing values with 0
-        variant_counts_df = variant_counts_df.fillna(0).astype(int)
-        variant_counts_df.index.name = 'transcript_id'
-        variant_counts_df = variant_counts_df.sort_index()
-    else:
-        variant_counts_df = pd.DataFrame()
+    num_workers = os.cpu_count() - 1 or 1
+    all_variant_counts = {}
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(process_sample, args): args[0] for args in args_list}
+        for future in concurrent.futures.as_completed(futures):
+            sample_id = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    sample_id, variant_counts = result
+                    if variant_counts is not None:
+                        all_variant_counts[sample_id] = variant_counts
+                    else:
+                        logging.warning(f"No variant counts for sample {sample_id}")
+            except Exception as exc:
+                logging.error(f"Sample {sample_id} generated an exception: {exc}")
+
+    # Build DataFrame from the collected variant counts
+    variant_counts_df = pd.DataFrame.from_dict(all_variant_counts, orient='index').fillna(0).astype(int)
+    variant_counts_df.index.name = 'sample_id'
+    variant_counts_df = variant_counts_df.sort_index()
+
+    # Transpose to have transcripts as rows and samples as columns
+    variant_counts_df = variant_counts_df.transpose()
+    variant_counts_df.index.name = 'transcript_id'
 
     return variant_counts_df
+
 
 def main():
 
@@ -434,7 +449,8 @@ def main():
     DATA_DIR = 'seq_to_pheno/tcga/data'
     VARIANT_DIR = os.path.join(DATA_DIR, 'variants')
     SNV_DIR = os.path.join(VARIANT_DIR, 'snv_mnv/')
-    INDEL_DIR = os.path.join(VARIANT_DIR, 'indel')
+    INDEL_DIR = os.path.join(VARIANT_DIR, 'indel/')
+    COUNTS_DIR = os.path.join(VARIANT_DIR, 'counts/')
     TRANSCRIPT_BASENAME = 'pcawg.rnaseq.transcript.expr.tpm.tsv.gz'
     TRANSCRIPT_DATA_S3 = f's3://icgc25k-open/PCAWG/transcriptome/transcript_expression/{TRANSCRIPT_BASENAME}'
     METADATA_BASENAME = 'rnaseq.extended.metadata.aliquot_id.V4.tsv.gz'
@@ -449,6 +465,7 @@ def main():
     # Create data directories if they don't exist
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(VARIANT_DIR, exist_ok=True)
+    os.makedirs(COUNTS_DIR, exist_ok=True)
 
     # Download files
     logging.info('Downloading ICGC data: Transcript Expression ')
@@ -530,19 +547,15 @@ def main():
     logging.info("Parsing GTF file to get transcript coordinates")
     transcript_df = parse_gtf(REFERENCE_GTF)
 
-    logging.info("Building interval trees for transcripts")
-    interval_trees = build_interval_tree(transcript_df)
-
     # Process samples to get variant counts per transcript
     logging.info("Processing samples to count variants per transcript")
-    variant_counts_df = process_all_samples(metadata_df, interval_trees, VARIANT_DIR, SNPEFF_JAR)
+    variant_counts_df = process_all_samples(metadata_df, VARIANT_DIR, SNPEFF_JAR, REFERENCE_GTF)
 
     # Save variant counts table
     now = datetime.datetime.now().strftime("%Y_%m_%d")
     variant_counts_file = os.path.join(DATA_DIR, f'variant_counts_per_transcript_{now}.tsv')
     variant_counts_df.to_csv(variant_counts_file, sep='\t', header=True)
     logging.info(f"Variant counts per transcript saved to {variant_counts_file}")
-
 
 if __name__ == '__main__':
     main()
