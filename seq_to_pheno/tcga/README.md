@@ -1,13 +1,13 @@
-# TCGA
+# ICGC/TCGA Preprocessing
 
-Space for processing TCGA data
+Space for processing ICGC/TCGA data
 
-## Datasets
+### Source
 The ICGC (International Cancer Genome Consortium) in collaboration with TCGA and the Sanger Institute has created a hub for a wide-range of NGS data and metadata across various cancer types.
 
 Instructions on how to access the data are [found on this page](https://docs.icgc-argo.org/docs/data-access/icgc-25k-data).
 
-### Get
+## ETL Overview
 **get normalized transcript expression data**
 
 ```
@@ -93,14 +93,25 @@ And here's a look at the format of one of these VCF files (after decompression):
 
 What we see here is information about the location of variants found in this subject, along with relevant information like alt_count and ref_count (which can be used to define allele depth and genotypes), as well as information related to the Variant_Classification, and the type of sequencing used to generate the data.
 
-### Mapping to transcripts
-The next import step is to map the transcript expression data to the variant calls we have for each sample. 
+### Annotate Variants
+For downstream analysis we will need to filter our variants based on their predicted protein-level effect. To do so, we will annotate our variants using SnpEff for variant predictions.
 
-I've created a script called **set_tcga_data.py** that should set up everything described above while also doing some work to aggregate variants across each transcript and subject. 
+This will require some extra steps to prepare. We must make sure that we are using the correct reference genome (as described in the PCAWG documentation). We also need to make sure we are using the correct reference GTF -- which will be needed to construct the SnpEff database. 
 
-The table you get at the end:
-- **variant_counts_per_transcript.tsv**
+And then finally, we will need to make sure to add contig-tags to each VCF file. The contig-tags are created from the reference genome used to make the original variant calls (GRCh37.75).
 
- This should be similar to the ICGC transcript expression table -- where the first column has the Ensembl transcript_id, and each column after will correspond to each of our samples from the metadata.
+All of the steps above can be run using ```set_tcga_data.py``` **just make sure to adjust your own filepaths**.
 
-The cell values are the total variant count found for each transcript's genomic locus and for each subject. 
+>NOTE: You will need access to both bcftools and samtools. If you have any issues setting up -- feel free to reach out to me (Harrison/Almuraqib) or tinker on your own.
+
+> NOTE: This script will take a long time to run, it might make sense to subset the list to only a handful of subjects first for downstream testing purposes.
+
+### Merge Annotations
+Once we have successfully preprocessed our annotations, we will need to combine the indels and snvs into a single vcf file. 
+
+We can run this using ```merge_annotations.py```
+
+### Get sequences
+We can then take these filtered and merged variant calls and then generate protein sequences based on the variants found. It will account for all overlapping variants in a transcript and create a protein-fasta file of the resulting protein-sequence. 
+
+We can run this using ```get_sequences.py```

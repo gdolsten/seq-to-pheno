@@ -14,10 +14,6 @@ from Bio.Seq import Seq
 import datetime
 import shutil
 
-
-# NOTE: Script shall be run from the top of the repo
-os.chdir('/Users/harrison.reed/codebase/seq-to-pheno')
-
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -431,6 +427,8 @@ def process_all_samples(metadata_df: pd.DataFrame, interval_trees: dict, variant
 
 def main():
 
+    # NOTE: Script shall be run from the top of the repo
+    os.chdir('/Users/harrison.reed/codebase/seq-to-pheno') # USE YOUR OWN PATHS
     # Define constants or load them from a config file
     ENDPOINT_URL = 'https://object.genomeinformatics.org'
     DATA_DIR = 'seq_to_pheno/tcga/data'
