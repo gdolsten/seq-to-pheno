@@ -516,7 +516,7 @@ def main():
     logging.info(f"{SNPEFF_JAR}")    
       
     logging.info('Preparing annotation database')
-    # download_annotation_database(SNPEFF_JAR, REFERENCE_SHORT)
+    download_annotation_database(SNPEFF_JAR, REFERENCE_SHORT)
     
     logging.info("Preparing reference genome")
     prepare_reference(REFERENCE_FA)
