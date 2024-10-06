@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 def prepare_reference(ref):
   if not os.path.exists(ref) and not os.path.exists(ref.replace('.gz', '')):
-    wget_file('https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_genomic.fna.gz', ref)
+    wget_file('https://ftp.sanger.ac.uk/pub/project/PanCancer/genome.fa.gz', ref)
     gunzip(ref)
     index_reference(ref.replace('.gz', ''))
 
@@ -99,10 +99,10 @@ def download_annotation_database(snpeff_jar, genome):
   except subprocess.CalledProcessError as e:
     logging.error(f"Failed to download annotation database {genome}: {e}")
 
-def unzip_zip(zip):
+def unzip_zip(zip, outdir):
   try:
-    command = ['unzip', zip]
-    logging.info(f"Unzipping {zip} to {zip.replace('.zip', '')}")
+    command = ['unzip', zip, '-d', outdir]
+    logging.info(f"Unzipping {zip} to {outdir}")
     subprocess.run(command, check=True)
   except subprocess.CalledProcessError as e:
     logging.error(f"Failed to unzip {zip}: {e}")
@@ -443,7 +443,9 @@ def process_all_samples(metadata_df: pd.DataFrame, variant_dir: str, snpeff_jar:
 def main():
 
     # NOTE: Script shall be run from the top of the repo
-    os.chdir('/home/harrisonhvaughnreed/Projects/seq-to-pheno') # USE YOUR OWN PATHS
+    HOME_DIR = '/home/harrisonhvaughnreed/'
+    BASE_DIR = os.path.join(HOME_DIR, 'Projects/seq-to-pheno')
+    os.chdir(BASE_DIR) # USE YOUR OWN PATHS
     # Define constants or load them from a config file
     ENDPOINT_URL = 'https://object.genomeinformatics.org'
     DATA_DIR = 'seq_to_pheno/tcga/data'
@@ -457,7 +459,7 @@ def main():
     METADATA_S3 = f's3://icgc25k-open/PCAWG/transcriptome/metadata/{METADATA_BASENAME}'
     SNV_INDEL_BASENAME = "final_consensus_snv_indel_passonly_icgc.public.tgz"
     SNV_INDEL_S3 = f's3://icgc25k-open/PCAWG/consensus_snv_indel/{SNV_INDEL_BASENAME}'
-    SNPEFF_DIR = '/home/harrisonhvaughnreed/'  # Update with the correct path to your snpEff.jar
+    SNPEFF_DIR = os.path.join(HOME_DIR, 'snpEff/')  # Update with the correct path to your snpEff.jar
     SNPEFF_JAR = os.path.join(SNPEFF_DIR, 'snpEff.jar')  # Update with the correct path to your snpEff.jar
     REFERENCE_SHORT = 'GRCh37.75' # Make sure snpEff and reference genome match!
     REFERENCE_FA = os.path.join(DATA_DIR, 'genome.fa.gz')
@@ -528,8 +530,8 @@ def main():
     # Verify SnpEff Jar exists
     logging.info("Checking for SnpEff jar")
     if not os.path.exists(SNPEFF_JAR):
-      wget_file('https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip', os.path.join(SNPEFF_DIR, 'snpEff_latest_core.zip'))
-      unzip_zip(os.path.join(SNPEFF_DIR, 'snpEff_latest_core.zip'))
+      wget_file('https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip', os.path.join(HOME_DIR, 'snpEff_latest_core.zip'))
+      unzip_zip(os.path.join(HOME_DIR, 'snpEff_latest_core.zip'), HOME_DIR)
     logging.info(f"{SNPEFF_JAR}")    
       
     logging.info('Preparing annotation database')
@@ -543,9 +545,6 @@ def main():
     if not os.path.exists(contigs_file):
       create_contigs(REFERENCE_FA.replace(".gz", '.fai'), contigs_file)
       add_contigs(SNV_DIR, INDEL_DIR, contigs_file)
-  
-    logging.info("Parsing GTF file to get transcript coordinates")
-    transcript_df = parse_gtf(REFERENCE_GTF)
 
     # Process samples to get variant counts per transcript
     logging.info("Processing samples to count variants per transcript")
