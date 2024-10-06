@@ -23,7 +23,7 @@ session = requests.Session()
 def fetch_transcript_cds(transcript_id):
     if transcript_id in transcript_cds_cache:
         return transcript_cds_cache[transcript_id]
-    server = "https://rest.ensembl.org"
+    server = "https://grch37.rest.ensembl.org"
     ext = f"/sequence/id/{transcript_id}?type=cds"
     headers = {"Content-Type": "text/plain"}
 
