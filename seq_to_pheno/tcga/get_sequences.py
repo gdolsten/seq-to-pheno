@@ -223,19 +223,19 @@ def save_protein_sequence_to_fasta(sequence, protein_id, output_file):
             f.write(sequence[i:i+60] + '\n')
 
 def process_sample(args):
-    vcf_file, output_dir, sample_id = args
-    process_vcf(vcf_file, output_dir, sample_id)
+    vcf_file, output_dir, sample_id, wildtype_output_dir = args
+    process_vcf(vcf_file, output_dir, sample_id, wildtype_output_dir)
 
-def process_vcf_directory(vcf_dir, output_dir):
+def process_vcf_directory(vcf_dir, output_dir, wildtype_output_dir):
     tasks = []
     for filename in os.listdir(vcf_dir):
         if filename.endswith('.vcf') or filename.endswith('.vcf.gz'):
             sample_id = filename.replace('.combined.vcf', '').replace('.vcf', '').replace('.gz', '')
             vcf_file = os.path.join(vcf_dir, filename)
-            tasks.append((vcf_file, output_dir, sample_id))
+            tasks.append((vcf_file, output_dir, sample_id, wildtype_output_dir))
     return tasks
 
-def process_vcf(vcf_file, output_dir, sample_id):
+def process_vcf(vcf_file, output_dir, sample_id, wildtype_output_dir):
     vcf_in = pysam.VariantFile(vcf_file)
     transcript_variants = {}
     failed_variants = []
@@ -296,38 +296,47 @@ def process_vcf(vcf_file, output_dir, sample_id):
             logging.warning(f"CDS sequence not found for transcript {transcript_id}")
             continue
 
-        # Sort variants by cDNA position (descending)
-        def extract_cdna_position(hgvs_c):
-            match = re.match(r'c\.([\d+]+)', hgvs_c)
-            if match:
-                return int(match.group(1))
-            else:
-                logging.warning(f"Could not extract cDNA position from {hgvs_c}")
-                return float('inf')
+        # Save wildtype protein sequence if not already saved
+        wildtype_protein_file = os.path.join(wildtype_output_dir, f"{transcript_id}.fasta")
+        if not os.path.exists(wildtype_protein_file):
+            wildtype_protein_sequence = translate_cds_to_protein(cds_sequence)
+            save_protein_sequence_to_fasta(wildtype_protein_sequence, transcript_id, wildtype_protein_file)
+            logging.info(f"Saved wildtype protein sequence for {transcript_id} to {wildtype_protein_file}")
 
-        variants.sort(key=lambda x: extract_cdna_position(x[0]), reverse=True)
-
-        mutated_cds_sequence = cds_sequence
-        for hgvs_c, _ in variants:
-            try:
-                mutated_cds_sequence = apply_variant_to_cds(mutated_cds_sequence, hgvs_c)
-            except NotImplementedError as e:
-                logging.warning(f"Variant not implemented {hgvs_c} for transcript {transcript_id}: {e}")
-                failed_variants.append((transcript_id, hgvs_c, str(e)))
-                continue
-            except Exception as e:
-                logging.error(f"Error applying variant {hgvs_c} to transcript {transcript_id}: {e}")
-                failed_variants.append((transcript_id, hgvs_c, str(e)))
-                continue
-
-        # Translate the mutated CDS into protein sequence
-        protein_sequence = translate_cds_to_protein(mutated_cds_sequence)
-
-        # Save the mutated protein sequence to a FASTA file
         protein_id = f"{sample_id}_{transcript_id}_mutated"
         output_file = os.path.join(output_dir, f"{protein_id}.fasta")
-        save_protein_sequence_to_fasta(protein_sequence, protein_id, output_file)
-        logging.info(f"Saved mutated protein sequence for {transcript_id} to {output_file}")
+        
+        if not os.path.exists(output_file):
+          # Sort variants by cDNA position (descending)
+          def extract_cdna_position(hgvs_c):
+              match = re.match(r'c\.([\d+]+)', hgvs_c)
+              if match:
+                  return int(match.group(1))
+              else:
+                  logging.warning(f"Could not extract cDNA position from {hgvs_c}")
+                  return float('inf')
+
+          variants.sort(key=lambda x: extract_cdna_position(x[0]), reverse=True)
+
+          mutated_cds_sequence = cds_sequence
+          for hgvs_c, _ in variants:
+              try:
+                  mutated_cds_sequence = apply_variant_to_cds(mutated_cds_sequence, hgvs_c)
+              except NotImplementedError as e:
+                  logging.warning(f"Variant not implemented {hgvs_c} for transcript {transcript_id}: {e}")
+                  failed_variants.append((transcript_id, hgvs_c, str(e)))
+                  continue
+              except Exception as e:
+                  logging.error(f"Error applying variant {hgvs_c} to transcript {transcript_id}: {e}")
+                  failed_variants.append((transcript_id, hgvs_c, str(e)))
+                  continue
+        
+          # Translate the mutated CDS into protein sequence
+          protein_sequence = translate_cds_to_protein(mutated_cds_sequence)
+
+          # Save the mutated protein sequence to a FASTA file
+          save_protein_sequence_to_fasta(protein_sequence, protein_id, output_file)
+          logging.info(f"Saved mutated protein sequence for {transcript_id} to {output_file}")
 
     # Optionally, write failed variants to a log file
     if failed_variants:
@@ -351,9 +360,11 @@ if __name__ == '__main__':
 
     vcf_dir = 'seq_to_pheno/tcga/data/variants/vcf'
     output_dir = 'seq_to_pheno/tcga/data/variants/mutated_proteins'
+    wildtype_output_dir = 'seq_to_pheno/tcga/data/variants/wildtype_proteins'
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(wildtype_output_dir, exist_ok=True)
 
-    tasks = process_vcf_directory(vcf_dir, output_dir)
+    tasks = process_vcf_directory(vcf_dir, output_dir, wildtype_output_dir)
 
     # Start the multiprocessing executor
     with ProcessPoolExecutor(max_workers=4) as executor:
