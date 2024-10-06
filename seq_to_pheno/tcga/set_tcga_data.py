@@ -532,10 +532,10 @@ def main():
     if not os.path.exists(SNPEFF_JAR):
       wget_file('https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip', os.path.join(HOME_DIR, 'snpEff_latest_core.zip'))
       unzip_zip(os.path.join(HOME_DIR, 'snpEff_latest_core.zip'), HOME_DIR)
+      logging.info('Preparing annotation database')
+      download_annotation_database(SNPEFF_JAR, REFERENCE_SHORT)
     logging.info(f"{SNPEFF_JAR}")    
       
-    logging.info('Preparing annotation database')
-    download_annotation_database(SNPEFF_JAR, REFERENCE_SHORT)
     
     logging.info("Preparing reference genome")
     prepare_reference(REFERENCE_FA)
