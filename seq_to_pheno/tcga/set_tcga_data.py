@@ -457,7 +457,8 @@ def main():
     METADATA_S3 = f's3://icgc25k-open/PCAWG/transcriptome/metadata/{METADATA_BASENAME}'
     SNV_INDEL_BASENAME = "final_consensus_snv_indel_passonly_icgc.public.tgz"
     SNV_INDEL_S3 = f's3://icgc25k-open/PCAWG/consensus_snv_indel/{SNV_INDEL_BASENAME}'
-    SNPEFF_JAR = '/Users/harrison.reed/snpEff/snpEff.jar'  # Update with the correct path to your snpEff.jar
+    SNPEFF_DIR = '/home/harrisonhvaughnreed/snpEff/'  # Update with the correct path to your snpEff.jar
+    SNPEFF_JAR = os.path.join(SNPEFF_DIR, 'snpEff.jar')  # Update with the correct path to your snpEff.jar
     REFERENCE_SHORT = 'GRCh37.75' # Make sure snpEff and reference genome match!
     REFERENCE_FA = os.path.join(DATA_DIR, 'genome.fa.gz')
     REFERENCE_GTF = os.path.join(DATA_DIR, 'Homo_sapiens.GRCh37.75.gtf.gz')
@@ -529,7 +530,7 @@ def main():
     if not os.path.exists(SNPEFF_JAR):
       wget_file('https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip', 'snpEff_latest_core.zip')
       unzip_zip('snpEff_latest_core.zip')
-      SNPEFF_JAR = 'snpEff/snpEff.jar'
+      os.makedirs(SNPEFF_DIR, exist_ok=True)
     logging.info(f"{SNPEFF_JAR}")    
       
     logging.info('Preparing annotation database')
