@@ -443,7 +443,7 @@ def process_all_samples(metadata_df: pd.DataFrame, variant_dir: str, snpeff_jar:
 def main():
 
     # NOTE: Script shall be run from the top of the repo
-    os.chdir('/Users/harrison.reed/codebase/seq-to-pheno') # USE YOUR OWN PATHS
+    os.chdir('/home/harrisonhvaughnreed/Projects/seq-to-pheno') # USE YOUR OWN PATHS
     # Define constants or load them from a config file
     ENDPOINT_URL = 'https://object.genomeinformatics.org'
     DATA_DIR = 'seq_to_pheno/tcga/data'
@@ -528,9 +528,8 @@ def main():
     # Verify SnpEff Jar exists
     logging.info("Checking for SnpEff jar")
     if not os.path.exists(SNPEFF_JAR):
-      wget_file('https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip', 'snpEff_latest_core.zip')
-      unzip_zip('snpEff_latest_core.zip')
-      os.makedirs(SNPEFF_DIR, exist_ok=True)
+      wget_file('https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip', os.path.join(SNPEFF_DIR, 'snpEff_latest_core.zip'))
+      unzip_zip(os.path.join(SNPEFF_DIR, 'snpEff_latest_core.zip'))
     logging.info(f"{SNPEFF_JAR}")    
       
     logging.info('Preparing annotation database')
