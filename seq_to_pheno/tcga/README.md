@@ -7,6 +7,29 @@ The ICGC (International Cancer Genome Consortium) in collaboration with TCGA and
 
 Instructions on how to access the data are [found on this page](https://docs.icgc-argo.org/docs/data-access/icgc-25k-data).
 
+## Requirements
+#### For you Shell environment
+```
+wget
+unzip
+java (openjdk-23)
+tabix
+bcftools
+samtools
+git
+```
+
+#### Python packages:
+```
+collections
+pandas
+pysam
+intervaltree
+biopython
+requests
+tqdm
+```
+
 ## ETL Overview
 **get normalized transcript expression data**
 
