@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 def prepare_reference(ref):
   if not os.path.exists(ref) and not os.path.exists(ref.replace('.gz', '')):
     wget_file('https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_genomic.fna.gz', ref)
-    unzip_zip(ref)
+    gunzip(ref)
     index_reference(ref.replace('.gz', ''))
 
 
@@ -457,7 +457,7 @@ def main():
     METADATA_S3 = f's3://icgc25k-open/PCAWG/transcriptome/metadata/{METADATA_BASENAME}'
     SNV_INDEL_BASENAME = "final_consensus_snv_indel_passonly_icgc.public.tgz"
     SNV_INDEL_S3 = f's3://icgc25k-open/PCAWG/consensus_snv_indel/{SNV_INDEL_BASENAME}'
-    SNPEFF_DIR = '/home/harrisonhvaughnreed/snpEff/'  # Update with the correct path to your snpEff.jar
+    SNPEFF_DIR = '/home/harrisonhvaughnreed/'  # Update with the correct path to your snpEff.jar
     SNPEFF_JAR = os.path.join(SNPEFF_DIR, 'snpEff.jar')  # Update with the correct path to your snpEff.jar
     REFERENCE_SHORT = 'GRCh37.75' # Make sure snpEff and reference genome match!
     REFERENCE_FA = os.path.join(DATA_DIR, 'genome.fa.gz')
