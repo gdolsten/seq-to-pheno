@@ -32,6 +32,25 @@ curl -X GET \
 ```python
 from datasets import load_dataset
 
+ds = load_dataset("seq-to-pheno/TCGA-Cancer-Variant-and-Clinical-Data")
+```
+
+```python
+from mlcroissant import Dataset
+
+ds = Dataset(jsonld="https://huggingface.co/api/datasets/seq-to-pheno/TCGA-Cancer-Variant-and-Clinical-Data/croissant")
+records = ds.records("default")
+```
+
+```python
+import pandas as pd
+
+df = pd.read_csv("hf://datasets/seq-to-pheno/TCGA-Cancer-Variant-and-Clinical-Data/protein_sequences_metadata.tsv", sep="\t")
+```
+
+```python
+from datasets import load_dataset
+
 mapped = load_dataset("seq-to-pheno/mapped_orthologs")
 ```
 
