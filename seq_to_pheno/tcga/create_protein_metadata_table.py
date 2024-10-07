@@ -106,10 +106,6 @@ def main():
 
         data_rows.append(row)
 
-        # If including sequences and we have collected 50 rows, stop
-        # if args.include_sequences and len(data_rows) >= 50:
-            # break
-
     # Create a DataFrame from the collected rows
     result_df = pd.DataFrame(data_rows)
 
