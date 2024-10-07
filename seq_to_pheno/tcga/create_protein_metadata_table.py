@@ -86,6 +86,7 @@ def main():
         # Build a dictionary for the row
         row = {
             'aliquot_id': sample_id,
+            'transcript_id': transcript_id
         }
 
         # Include sequences or file paths based on the argument
