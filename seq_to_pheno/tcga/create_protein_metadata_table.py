@@ -94,12 +94,12 @@ def main():
             # Read the sequences from the FASTA files
             mutated_sequence = read_fasta_sequence(mutated_protein_path)
             wildtype_sequence = read_fasta_sequence(wildtype_protein_path)
-            row['mutated_protein_sequence'] = mutated_sequence
-            row['wildtype_protein_sequence'] = wildtype_sequence
+            row['mutated_protein'] = mutated_sequence
+            row['wildtype_protein'] = wildtype_sequence
         else:
             # Include the file paths
-            row['mutated_protein_path'] = mutated_protein_path
-            row['wildtype_protein_path'] = wildtype_protein_path
+            row['mutated_protein'] = mutated_protein_path
+            row['wildtype_protein'] = wildtype_protein_path
 
         for col_name, meta_col in columns_to_extract.items():
             value = sample_metadata.get(meta_col, '')

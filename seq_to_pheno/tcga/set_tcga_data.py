@@ -412,7 +412,6 @@ def process_all_samples(metadata_df: pd.DataFrame, variant_dir: str, snpeff_jar:
 
     num_workers = os.cpu_count() - 1 or 1
     all_variant_counts = {}
-
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = {executor.submit(process_sample, args): args[0] for args in args_list}
         for future in concurrent.futures.as_completed(futures):
@@ -536,7 +535,6 @@ def main():
       download_annotation_database(SNPEFF_JAR, REFERENCE_SHORT)
     logging.info(f"{SNPEFF_JAR}")    
       
-    
     logging.info("Preparing reference genome")
     prepare_reference(REFERENCE_FA)
 

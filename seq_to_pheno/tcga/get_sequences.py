@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+session = requests.Session()
 
 # Initialize a cache for CDS sequences
 if os.path.exists('cds_cache.pkl'):
@@ -18,7 +19,6 @@ if os.path.exists('cds_cache.pkl'):
 else:
     transcript_cds_cache = {}
 
-session = requests.Session()
 
 def fetch_transcript_cds(transcript_id):
     if transcript_id in transcript_cds_cache:
