@@ -96,8 +96,8 @@ except Exception as e:
     raise
 
 # Define hyperparameters
-MAX_LENGTH = 512
-BATCH_SIZE = 8
+MAX_LENGTH = 256
+BATCH_SIZE = 2
 LEARNING_RATE = 1e-5
 EPOCHS = 5
 
@@ -138,11 +138,12 @@ optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
 # Training loop
 train_losses = []
+gradient_accumulation_steps = 4
 val_losses = []
 for epoch in range(EPOCHS):
     model.train()
     total_loss = 0
-    for batch in train_loader:
+    for batch_idx, batch in enumerate(train_loader):
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
         labels = batch['labels'].to(device)
@@ -151,8 +152,12 @@ for epoch in range(EPOCHS):
         try:
             outputs = model(input_ids, attention_mask)
             loss = criterion(outputs.squeeze(), labels)
+            loss = loss / gradient_accumulation_steps
             loss.backward()
-            optimizer.step()
+
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
         except Exception as e:
             logger.error(f"An error occurred during training: {e}")
             raise
