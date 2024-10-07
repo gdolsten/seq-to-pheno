@@ -266,3 +266,5 @@ With this table we are at the point where we are very close to being ready to ge
   - Wildtype embeddings should cluster separately from mutant embeddings.
   - Mutant embeddings should cluster based on the extremes of donor survival time. 
   - Transcripts with the highest relational effect should show patterns across all/most subjects.
+
+Don't feel committed to this exact example analysis. There are probably many ways we can create a reasonable and reproducable experiment. 
