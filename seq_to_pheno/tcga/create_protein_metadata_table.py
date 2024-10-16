@@ -1,6 +1,10 @@
 import os
 import pandas as pd
 import argparse
+import time
+import requests
+import numpy as np  # Make sure to import numpy if not already imported
+
 
 def read_fasta_sequence(fasta_path):
     """
@@ -15,6 +19,36 @@ def read_fasta_sequence(fasta_path):
             sequence += line.strip()
     return sequence
 
+def fetch_gene_names(transcript_ids):
+    transcript_ids = list(transcript_ids)
+    server = "https://grch37.rest.ensembl.org"
+    endpoint = "/lookup/id"
+    headers = {"Content-Type": "application/json"}
+    gene_name_map = {}
+
+    batch_size = 200  # Reduce batch size if necessary
+    for i in range(0, len(transcript_ids), batch_size):
+        batch = transcript_ids[i:i+batch_size]
+        data = {"ids": batch}
+        try:
+            response = requests.post(f"{server}{endpoint}", headers=headers, json=data)
+            if not response.ok:
+                response.raise_for_status()
+            decoded = response.json()
+            for tid, info in decoded.items():
+                if info:
+                    gene_name = info.get('display_name')
+                    gene_name_map[tid] = gene_name
+                else:
+                    gene_name_map[tid] = None
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching gene names for batch starting at index {i}: {e}")
+            # You may choose to retry or skip this batch
+            continue
+        time.sleep(1)  # To respect rate limits
+    return gene_name_map
+
+
 def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Create protein sequences metadata table.')
@@ -25,11 +59,11 @@ def main():
     # Paths to directories
     mutated_proteins_dir = 'seq_to_pheno/tcga/data/variants/mutated_proteins'
     wildtype_proteins_dir = 'seq_to_pheno/tcga/data/variants/wildtype_proteins'
-    metadata_file = 'seq_to_pheno/tcga/data/rnaseq.extended.metadata.aliquot_id.V4.tsv.gz'
+    metadata_file = 'seq_to_pheno/tcga/data/new_metadata.csv'
     output_file = 'seq_to_pheno/tcga/data/protein_sequences_metadata.tsv'
 
     # Read the metadata file into a DataFrame
-    metadata_df = pd.read_csv(metadata_file, sep='\t', compression='gzip', low_memory=False)
+    metadata_df = pd.read_csv(metadata_file, sep=',', low_memory=False)
 
     # List all mutated protein FASTA files
     mutated_files = [f for f in os.listdir(mutated_proteins_dir) if f.endswith('.fasta')]
@@ -65,7 +99,6 @@ def main():
             continue
 
         # Extract required metadata fields
-        # Ensure to handle missing data
         sample_metadata = sample_metadata.iloc[0]  # Get the first matching row
 
         # Columns to extract
@@ -107,11 +140,27 @@ def main():
 
         data_rows.append(row)
 
+        # Limit to first 50 entries if including sequences
+        # if args.include_sequences and len(data_rows) >= 50:
+            # break
+
     # Create a DataFrame from the collected rows
     result_df = pd.DataFrame(data_rows)
+    
+    # Ensure transcript IDs are strings
+    result_df['transcript_id'] = result_df['transcript_id'].astype(str)
+    
+    # Clean transcript IDs
+    result_df['transcript_id'] = result_df['transcript_id'].str.split('.').str[0].str.strip()
+
+    # Fetch gene names
+    transcript_ids = result_df['transcript_id'].unique().tolist()
+    gene_name_map = fetch_gene_names(transcript_ids)
+    mapping_df = pd.DataFrame(list(gene_name_map.items()), columns=['transcript_id', 'gene_name'])
+    metadata_with_gene = result_df.merge(mapping_df, on='transcript_id', how='left')
 
     # Save the DataFrame to a TSV file
-    result_df.to_csv(output_file, index=False, sep='\t')
+    metadata_with_gene.to_csv(output_file, index=False, sep='\t')
 
     print(f"Metadata table saved to {output_file}")
 

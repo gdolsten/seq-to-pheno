@@ -17,18 +17,19 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Load the dataset with error handling
-try:
-    df = pd.read_csv('seq_to_pheno/tcga/data/protein_sequences_metadata.tsv', sep='\t')
-    logger.info("Dataset loaded successfully.")
-except FileNotFoundError as e:
-    logger.error(f"File not found: {e}")
-    raise
-except pd.errors.EmptyDataError as e:
-    logger.error(f"Empty data error: {e}")
-    raise
-except Exception as e:
-    logger.error(f"An error occurred while loading the dataset: {e}")
-    raise
+if 'df' not in globals():
+    try:
+        df = pd.read_csv('seq_to_pheno/tcga/data/protein_sequences_metadata.tsv', sep='	')
+        logger.info("Dataset loaded successfully.")
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {e}")
+        raise
+    except pd.errors.EmptyDataError as e:
+        logger.error(f"Empty data error: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"An error occurred while loading the dataset: {e}")
+        raise
 
 # Extract relevant columns
 try:
@@ -41,22 +42,20 @@ except KeyError as e:
     raise
 
 # Split the dataset into training and validation sets
-try:
-    train_sequences, val_sequences, train_labels, val_labels, train_ids, val_ids = train_test_split(
-        sequences, survival_times, transcript_ids, test_size=0.2, random_state=42
-    )
-    # Normalize survival times
-    train_labels_mean = np.mean(train_labels)
-    train_labels_std = np.std(train_labels)
-    train_labels = (train_labels - train_labels_mean) / train_labels_std
-    val_labels = (val_labels - train_labels_mean) / train_labels_std
-    # Normalize survival times
-    train_labels = (train_labels - np.mean(train_labels)) / np.std(train_labels)
-    val_labels = (val_labels - np.mean(train_labels)) / np.std(train_labels)
-    logger.info("Dataset split into training and validation sets.")
-except Exception as e:
-    logger.error(f"An error occurred during dataset splitting: {e}")
-    raise
+if 'train_sequences' not in globals():
+    try:
+        train_sequences, val_sequences, train_labels, val_labels, train_ids, val_ids = train_test_split(
+            sequences, survival_times, transcript_ids, test_size=0.2, random_state=42
+        )
+        # Normalize survival times
+        train_labels_mean = np.mean(train_labels)
+        train_labels_std = np.std(train_labels)
+        train_labels = (train_labels - train_labels_mean) / train_labels_std
+        val_labels = (val_labels - train_labels_mean) / train_labels_std
+        logger.info("Dataset split into training and validation sets.")
+    except Exception as e:
+        logger.error(f"An error occurred during dataset splitting: {e}")
+        raise
 
 # Define custom dataset class
 class ProteinDataset(Dataset):
