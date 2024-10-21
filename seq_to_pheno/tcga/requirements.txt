@@ -1,2 +1,7 @@
-pandas
 collections
+pandas
+pysam
+intervaltree
+biopython
+requests
+tqdm

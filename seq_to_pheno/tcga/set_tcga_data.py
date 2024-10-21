@@ -9,14 +9,123 @@ import pysam
 from intervaltree import IntervalTree
 import glob
 import sys
-import requests
-from Bio.Seq import Seq
-
+import shutil
+import concurrent.futures
+import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-def download_file(s3_path: str, local_dir: str, endpoint_url: str) -> None:
+def prepare_reference(ref):
+  if not os.path.exists(ref) and not os.path.exists(ref.replace('.gz', '')):
+    wget_file('https://ftp.sanger.ac.uk/pub/project/PanCancer/genome.fa.gz', ref)
+    gunzip(ref)
+    index_reference(ref.replace('.gz', ''))
+
+
+def add_contigs(snv_dir, indel_dir, contigs_file):
+  for vcf_dir in [snv_dir, indel_dir]:
+    for filename in os.listdir(vcf_dir):
+      if filename.endswith('.vcf') or filename.endswith('.vcf.gz'):
+        vcf_input_path = os.path.join(vcf_dir, filename)
+        print(f"Processing {filename}...")
+        add_contigs_with_bcftools(vcf_input_path, contigs_file)
+
+
+def add_contigs_with_bcftools(vcf_input_path, contigs_file):
+    temp_header = vcf_input_path + '.header.txt'
+    new_header = vcf_input_path + '.new_header.txt'
+    temp_vcf = vcf_input_path + '.tmp.vcf.gz'
+
+    # Step 1: Extract the VCF header
+    with open(temp_header, 'w') as header_file:
+        cmd = ['bcftools', 'view', '-h', vcf_input_path]
+        logging.info(f'Extracting header from {vcf_input_path}')
+        subprocess.run(cmd, stdout=header_file, check=True)
+
+    # Step 2 and 3: Remove existing contig lines and insert new contig lines before #CHROM line
+    with open(temp_header, 'r') as infile, open(new_header, 'w') as outfile:
+        for line in infile:
+            if line.startswith('##contig='):
+                continue  # Skip existing contig lines
+            elif line.startswith('#CHROM'):
+                # Insert new contig lines before the #CHROM line
+                with open(contigs_file, 'r') as contigs:
+                    outfile.writelines(contigs)
+                outfile.write(line)  # Write the #CHROM line
+            else:
+                outfile.write(line)
+
+    # Step 4: Replace the VCF header
+    cmd = ['bcftools', 'reheader', '-h', new_header, '-o', temp_vcf, vcf_input_path]
+    logging.info(f'Replacing header of {vcf_input_path}')
+    subprocess.run(cmd, check=True)
+
+    # Step 5: Replace the original VCF file with the updated one
+    shutil.move(temp_vcf, vcf_input_path)
+
+    # Step 6: Index the updated VCF file
+    cmd = ['tabix', '-p', 'vcf', vcf_input_path]
+    logging.info(f'Indexing {vcf_input_path}')
+    subprocess.run(cmd, check=True)
+
+    # Clean up temporary files
+    os.remove(temp_header)
+    os.remove(new_header)
+
+
+def create_contigs(fai_file, contigs_file):
+    with open(fai_file, 'r') as fai, open(contigs_file, 'w') as out:
+        for line in fai:
+            fields = line.strip().split('\t')
+            contig_id = fields[0]
+            contig_length = fields[1]
+            out.write(f'##contig=<ID={contig_id},length={contig_length}>\n')
+
+
+def index_reference(ref):
+  try:
+    command = ['samtools', 'faidx', ref]
+    logging.info(f"Indexing reference sequence {ref}")
+    subprocess.run(command, check=True)
+  except subprocess.CalledProcessError as e:
+    logging.error(f"Failed to index reference sequence {ref}: {e}")
+
+def download_annotation_database(snpeff_jar, genome):
+  try:
+    command = ['java', '-jar', snpeff_jar, 'download', '-v', genome]
+    logging.info("Downloading annotation database")
+    subprocess.run(command, check=True)
+  except subprocess.CalledProcessError as e:
+    logging.error(f"Failed to download annotation database {genome}: {e}")
+
+def unzip_zip(zip, outdir):
+  try:
+    command = ['unzip', zip, '-d', outdir]
+    logging.info(f"Unzipping {zip} to {outdir}")
+    subprocess.run(command, check=True)
+  except subprocess.CalledProcessError as e:
+    logging.error(f"Failed to unzip {zip}: {e}")
+    
+def gunzip(gz):
+  try:
+    command = ['gunzip', gz]
+    logging.info(f"gunzipping {gz} to {gz.replace('.gz', '')}")
+    subprocess.run(command, check=True)
+  except subprocess.CalledProcessError as e:
+    logging.error(f"Failed to gunzip {gz}: {e}")
+
+
+def wget_file(url, out_path):
+  try:
+    command = ['wget', '-O', out_path, url]
+    logging.info(f"Downloading {url} to {out_path}")
+    subprocess.run(command, check=True)
+  except subprocess.CalledProcessError as e:
+    logging.error(f"Failed to download {url}: {e}")
+
+
+def download_s3_file(s3_path: str, local_dir: str, endpoint_url: str) -> None:
     """
     Downloads a file from an S3 bucket using AWS CLI.
 
@@ -76,7 +185,8 @@ def get_wgs_aliquot_ids_from_filenames(directory: str) -> Set[str]:
 
 def add_has_consensus_data_column(metadata_df: pd.DataFrame, wgs_ids_set: Set[str]) -> pd.DataFrame:
     """
-    Adds a 'has_consensus_data' column to the metadata DataFrame.
+    Adds a 'has_consensus_data' column to the metadata DataFrame. This ensures
+    that we highlight subjects that have a complete dataset.
 
     Parameters:
         metadata_df (pd.DataFrame): The original metadata DataFrame.
@@ -229,13 +339,20 @@ def process_sample(args):
     Processes a single sample to count variants per transcript.
 
     Parameters:
-        args (tuple): A tuple containing sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar
+        args (tuple): A tuple containing sample_id, wgs_aliquot_id, variant_dir, snpeff_jar, reference_gtf
 
     Returns:
-        pd.DataFrame or None: DataFrame with transcript IDs as index and variant counts for this sample, or None if no data.
+        tuple: (sample_id, variant_counts_dict) or (sample_id, None) if no variants found.
     """
-    sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar = args
+    sample_id, wgs_aliquot_id, variant_dir, snpeff_jar, reference_gtf = args
     variant_counts = defaultdict(int)
+
+    # Initialize interval_trees
+    if 'interval_trees' not in globals():
+        global interval_trees
+        logging.info(f"Building interval trees in worker process for sample {sample_id}")
+        transcript_df = parse_gtf(reference_gtf)
+        interval_trees = build_interval_tree(transcript_df)
 
     # Paths to VCF files
     snv_vcf_pattern = os.path.join(variant_dir, 'snv_mnv', f"{wgs_aliquot_id}.consensus.*.somatic.snv_mnv.vcf.gz")
@@ -272,71 +389,105 @@ def process_sample(args):
         logging.warning(f"Indel VCF not found for sample {sample_id}")
 
     if variant_counts:
-        # Create DataFrame for this sample
-        df_sample = pd.DataFrame.from_dict(variant_counts, orient='index', columns=[sample_id])
-        return df_sample
+        return sample_id, dict(variant_counts)
     else:
         logging.warning(f"No variants found for sample {sample_id}")
-        return None
+        return sample_id, None
 
-def process_all_samples(metadata_df: pd.DataFrame, interval_trees: dict, variant_dir: str, snpeff_jar: str) -> pd.DataFrame:
-    """
-    Processes all samples to count variants per transcript.
 
-    Parameters:
-        metadata_df (pd.DataFrame): Metadata DataFrame with samples to process.
-        interval_trees (dict): Interval trees of transcripts.
-        variant_dir (str): Directory containing variant files.
-        snpeff_jar (str): Path to snpEff.jar file.
+def process_all_samples(metadata_df: pd.DataFrame, variant_dir: str, snpeff_jar: str, reference_gtf: str) -> pd.DataFrame:
+    '''
+    Processes all samples to count variants per transcript using parallel processing.
 
     Returns:
         pd.DataFrame: DataFrame with transcripts as rows and samples as columns.
-    """
-    data_frames = []
+    '''
+    args_list = []
     for idx, row in metadata_df.iterrows():
         sample_id = row['aliquot_id']
         wgs_aliquot_id = row['wgs_aliquot_id']
-        logging.info(f"Processing sample {sample_id}")
-        args = (sample_id, wgs_aliquot_id, interval_trees, variant_dir, snpeff_jar)
-        df_sample = process_sample(args)
-        if df_sample is not None:
-            data_frames.append(df_sample)
+        logging.info(f"Preparing to process sample {sample_id}")
+        args = (sample_id, wgs_aliquot_id, variant_dir, snpeff_jar, reference_gtf)
+        args_list.append(args)
 
-    # Concatenate all sample DataFrames
-    if data_frames:
-        variant_counts_df = pd.concat(data_frames, axis=1)
-        # Fill missing values with 0
-        variant_counts_df = variant_counts_df.fillna(0).astype(int)
-        variant_counts_df.index.name = 'transcript_id'
-        variant_counts_df = variant_counts_df.sort_index()
-    else:
-        variant_counts_df = pd.DataFrame()
+    num_workers = os.cpu_count() - 1 or 1
+    all_variant_counts = {}
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(process_sample, args): args[0] for args in args_list}
+        for future in concurrent.futures.as_completed(futures):
+            sample_id = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    sample_id, variant_counts = result
+                    if variant_counts is not None:
+                        all_variant_counts[sample_id] = variant_counts
+                    else:
+                        logging.warning(f"No variant counts for sample {sample_id}")
+            except Exception as exc:
+                logging.error(f"Sample {sample_id} generated an exception: {exc}")
+
+    # Build DataFrame from the collected variant counts
+    variant_counts_df = pd.DataFrame.from_dict(all_variant_counts, orient='index').fillna(0).astype(int)
+    variant_counts_df.index.name = 'sample_id'
+    variant_counts_df = variant_counts_df.sort_index()
+
+    # Transpose to have transcripts as rows and samples as columns
+    variant_counts_df = variant_counts_df.transpose()
+    variant_counts_df.index.name = 'transcript_id'
 
     return variant_counts_df
 
+
 def main():
 
+    # NOTE: Script shall be run from the top of the repo
+    HOME_DIR = '/home/harrisonhvaughnreed/'
+    BASE_DIR = os.path.join(HOME_DIR, 'Projects/seq-to-pheno')
+    os.chdir(BASE_DIR) # USE YOUR OWN PATHS
     # Define constants or load them from a config file
     ENDPOINT_URL = 'https://object.genomeinformatics.org'
     DATA_DIR = 'seq_to_pheno/tcga/data'
     VARIANT_DIR = os.path.join(DATA_DIR, 'variants')
-    TRANSCRIPT_DATA_S3 = 's3://icgc25k-open/PCAWG/transcriptome/transcript_expression/pcawg.rnaseq.transcript.expr.tpm.tsv.gz'
-    METADATA_S3 = 's3://icgc25k-open/PCAWG/transcriptome/metadata/rnaseq.extended.metadata.aliquot_id.V4.tsv.gz'
-    SNV_INDEL_S3 = 's3://icgc25k-open/PCAWG/consensus_snv_indel/final_consensus_snv_indel_passonly_icgc.public.tgz'
-    SNPEFF_JAR = '/Users/harrison.reed/snpEff/snpEff.jar'  # Update with the correct path to your snpEff.jar
-    GENOME_VERSION = 'GRCh37.75'      # Ensure this is the genome version you downloaded for snpEff
-
+    SNV_DIR = os.path.join(VARIANT_DIR, 'snv_mnv/')
+    INDEL_DIR = os.path.join(VARIANT_DIR, 'indel/')
+    COUNTS_DIR = os.path.join(VARIANT_DIR, 'counts/')
+    TRANSCRIPT_BASENAME = 'pcawg.rnaseq.transcript.expr.tpm.tsv.gz'
+    TRANSCRIPT_DATA_S3 = f's3://icgc25k-open/PCAWG/transcriptome/transcript_expression/{TRANSCRIPT_BASENAME}'
+    METADATA_BASENAME = 'rnaseq.extended.metadata.aliquot_id.V4.tsv.gz'
+    METADATA_S3 = f's3://icgc25k-open/PCAWG/transcriptome/metadata/{METADATA_BASENAME}'
+    SNV_INDEL_BASENAME = "final_consensus_snv_indel_passonly_icgc.public.tgz"
+    SNV_INDEL_S3 = f's3://icgc25k-open/PCAWG/consensus_snv_indel/{SNV_INDEL_BASENAME}'
+    SNPEFF_DIR = os.path.join(HOME_DIR, 'snpEff/')  # Update with the correct path to your snpEff.jar
+    SNPEFF_JAR = os.path.join(SNPEFF_DIR, 'snpEff.jar')  # Update with the correct path to your snpEff.jar
+    REFERENCE_SHORT = 'GRCh37.75' # Make sure snpEff and reference genome match!
+    REFERENCE_FA = os.path.join(DATA_DIR, 'genome.fa.gz')
+    REFERENCE_GTF = os.path.join(DATA_DIR, 'Homo_sapiens.GRCh37.75.gtf.gz')
+    
     # Create data directories if they don't exist
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(VARIANT_DIR, exist_ok=True)
+    os.makedirs(COUNTS_DIR, exist_ok=True)
 
     # Download files
-    download_file(TRANSCRIPT_DATA_S3, DATA_DIR, ENDPOINT_URL)
-    download_file(METADATA_S3, DATA_DIR, ENDPOINT_URL)
-    download_file(SNV_INDEL_S3, DATA_DIR, ENDPOINT_URL)
-
-    # Extract SNV and Indel data
-    extract_tar_gz(os.path.join(DATA_DIR, 'final_consensus_snv_indel_passonly_icgc.public.tgz'), VARIANT_DIR)
+    logging.info('Downloading ICGC data: Transcript Expression ')
+    if not os.path.exists(os.path.join(DATA_DIR, TRANSCRIPT_BASENAME)):
+      if not os.path.exists(os.path.join(DATA_DIR, TRANSCRIPT_BASENAME.replace(".gz", ''))):
+        logging.info(os.path.join(DATA_DIR, TRANSCRIPT_BASENAME.replace(".gz", '')))
+        download_s3_file(TRANSCRIPT_DATA_S3, DATA_DIR, ENDPOINT_URL)
+    
+    logging.info('Downloading ICGC data: Metadata')
+    if not os.path.exists(os.path.join(DATA_DIR, METADATA_BASENAME)):
+      if not os.path.exists(os.path.join(DATA_DIR, METADATA_BASENAME.replace(".gz", ''))):
+        logging.info(os.path.join(DATA_DIR, METADATA_BASENAME.replace(".gz", '')))
+        download_s3_file(METADATA_S3, DATA_DIR, ENDPOINT_URL)
+              
+    logging.info('Downloading ICGC data: SNV and Indels ')
+    if not os.path.exists(os.path.join(DATA_DIR, SNV_INDEL_BASENAME)):
+      if not os.path.exists(os.path.join(DATA_DIR, SNV_INDEL_BASENAME.replace(".gz", ''))):
+        logging.info(os.path.join(DATA_DIR, SNV_INDEL_BASENAME.replace(".gz", '')))
+        download_s3_file(SNV_INDEL_S3, DATA_DIR, ENDPOINT_URL)
+        extract_tar_gz(os.path.join(DATA_DIR, 'final_consensus_snv_indel_passonly_icgc.public.tgz'), VARIANT_DIR)
 
     # Paths to variant directories
     indel_dir = os.path.join(VARIANT_DIR, 'indel')
@@ -369,28 +520,39 @@ def main():
     metadata_df.to_csv(updated_metadata_file, sep='\t', index=False)
     logging.info(f"Updated metadata saved to {updated_metadata_file}")
 
-    # Load Ensembl GTF file
-    gtf_file = os.path.join(DATA_DIR, 'Homo_sapiens.GRCh37.87.gtf.gz')
-    if not os.path.exists(gtf_file):
-        logging.info("Downloading Ensembl GTF file")
-        gtf_url = 'ftp://ftp.ensembl.org/pub/grch37/release-87/gtf/homo_sapiens/Homo_sapiens.GRCh37.87.gtf.gz'
-        download_file(gtf_url, DATA_DIR, '')
+    logging.info("Checking for GTF")
+    if not os.path.exists(REFERENCE_GTF) and not os.path.exists(REFERENCE_GTF.replace('.gz', '')):
+      gtf_url = 'https://ftp.ensembl.org/pub/release-75/gtf/homo_sapiens/Homo_sapiens.GRCh37.75.gtf.gz'
+      wget_file(gtf_url, REFERENCE_GTF)
+    logging.info(f'{REFERENCE_GTF}')
 
-    logging.info("Parsing GTF file to get transcript coordinates")
-    transcript_df = parse_gtf(gtf_file)
+    # Verify SnpEff Jar exists
+    logging.info("Checking for SnpEff jar")
+    if not os.path.exists(SNPEFF_JAR):
+      wget_file('https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip', os.path.join(HOME_DIR, 'snpEff_latest_core.zip'))
+      unzip_zip(os.path.join(HOME_DIR, 'snpEff_latest_core.zip'), HOME_DIR)
+      logging.info('Preparing annotation database')
+      download_annotation_database(SNPEFF_JAR, REFERENCE_SHORT)
+    logging.info(f"{SNPEFF_JAR}")    
+      
+    logging.info("Preparing reference genome")
+    prepare_reference(REFERENCE_FA)
 
-    logging.info("Building interval trees for transcripts")
-    interval_trees = build_interval_tree(transcript_df)
+    logging.info("Preparing VCF contigs using reference")
+    contigs_file = os.path.join(DATA_DIR, 'contigs.txt')
+    if not os.path.exists(contigs_file):
+      create_contigs(REFERENCE_FA.replace(".gz", '.fai'), contigs_file)
+      add_contigs(SNV_DIR, INDEL_DIR, contigs_file)
 
     # Process samples to get variant counts per transcript
     logging.info("Processing samples to count variants per transcript")
-    variant_counts_df = process_all_samples(metadata_df, interval_trees, VARIANT_DIR, SNPEFF_JAR)
+    variant_counts_df = process_all_samples(metadata_df, VARIANT_DIR, SNPEFF_JAR, REFERENCE_GTF)
 
     # Save variant counts table
-    variant_counts_file = os.path.join(DATA_DIR, 'variant_counts_per_transcript.tsv')
+    now = datetime.datetime.now().strftime("%Y_%m_%d")
+    variant_counts_file = os.path.join(DATA_DIR, f'variant_counts_per_transcript_{now}.tsv')
     variant_counts_df.to_csv(variant_counts_file, sep='\t', header=True)
     logging.info(f"Variant counts per transcript saved to {variant_counts_file}")
-
 
 if __name__ == '__main__':
     main()

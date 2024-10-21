@@ -1,13 +1,36 @@
-# TCGA
+# ICGC/TCGA Preprocessing
 
-Space for processing TCGA data
+Space for processing ICGC/TCGA data
 
-## Datasets
+### Source
 The ICGC (International Cancer Genome Consortium) in collaboration with TCGA and the Sanger Institute has created a hub for a wide-range of NGS data and metadata across various cancer types.
 
 Instructions on how to access the data are [found on this page](https://docs.icgc-argo.org/docs/data-access/icgc-25k-data).
 
-### Get
+## Requirements
+#### For you Shell environment
+```
+wget
+unzip
+java (openjdk-23)
+tabix
+bcftools
+samtools
+git
+```
+
+#### Python packages:
+```
+collections
+pandas
+pysam
+intervaltree
+biopython
+requests
+tqdm
+```
+
+## ETL Overview
 **get normalized transcript expression data**
 
 ```
@@ -93,14 +116,155 @@ And here's a look at the format of one of these VCF files (after decompression):
 
 What we see here is information about the location of variants found in this subject, along with relevant information like alt_count and ref_count (which can be used to define allele depth and genotypes), as well as information related to the Variant_Classification, and the type of sequencing used to generate the data.
 
-### Mapping to transcripts
-The next import step is to map the transcript expression data to the variant calls we have for each sample. 
+### Annotate Variants
+For downstream analysis we will need to filter our variants based on their predicted protein-level effect. To do so, we will annotate our variants using SnpEff for variant predictions.
 
-I've created a script called **set_tcga_data.py** that should set up everything described above while also doing some work to aggregate variants across each transcript and subject. 
+This will require some extra steps to prepare. We must make sure that we are using the correct reference genome (as described in the PCAWG documentation). We also need to make sure we are using the correct reference GTF -- which will be needed to construct the SnpEff database. 
 
-The table you get at the end:
-- **variant_counts_per_transcript.tsv**
+And then finally, we will need to make sure to add contig-tags to each VCF file. The contig-tags are created from the reference genome used to make the original variant calls (GRCh37.75).
 
- This should be similar to the ICGC transcript expression table -- where the first column has the Ensembl transcript_id, and each column after will correspond to each of our samples from the metadata.
+All of the steps above can be run using ```set_tcga_data.py``` **just make sure to adjust your own filepaths**.
 
-The cell values are the total variant count found for each transcript's genomic locus and for each subject. 
+>NOTE: You will need access to both bcftools and samtools. If you have any issues setting up -- feel free to reach out to me (Harrison/Almuraqib) or tinker on your own.
+
+> NOTE: This script will take a long time to run, it might make sense to subset the list to only a handful of subjects first for downstream testing purposes.
+
+Once finished we can now see the **ANN** tag now added to the info field on our VCF files:
+
+In the header:
+```
+##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: 'Allele | Annotation | Annotation_Impact | Gene_Name | Gene_ID | Feature_Type | Feature_ID | Transcript_BioType | Rank | HGVS.c | HGVS.p | cDNA.pos / cDNA.length | CDS.pos / CDS.length | AA.pos / AA.length | Distance | ERRORS / WARNINGS / INFO'">
+```
+
+Example VCF line:
+```
+#CHROM  POS ID  REF ALT QUAL    FILTER  INFO
+1   1273949 .   A   G   .   .   Callers=broad,dkfz,muse,sanger;NumCallers=4;VAF=0.3182;cosmic=COSM4909256;t_alt_count=28;t_ref_count=60;Variant_Classification=Missense_Mutation;ANN=G|missense_variant|MODERATE|DVL1|ENSG00000107404|transcript|ENST00000378888|protein_coding|12/15|c.1292T>C|p.Ile431Thr|1577/3239|1292/2088|431/695||,G|missense_variant|MODERATE|DVL1|ENSG00000107404|transcript|ENST00000378891|protein_coding|12/15|c.1217T>C|p.Ile406Thr|1264/2926|1217/2013|406/670||,G|downstream_gene_variant|MODIFIER|TAS1R3|ENSG00000169962|transcript|ENST00000339381|protein_coding||c.*4105A>G|||||3263|,G|downstream_gene_variant|MODIFIER|DVL1|ENSG00000107404|transcript|ENST00000472445|retained_intron||n.*3201T>C|||||3201|
+```
+
+
+### Merge Annotations
+Once we have successfully preprocessed our annotations, we will need to combine the indels and snvs into a single vcf file. 
+
+We can run this using ```merge_annotations.py```
+
+This will create the directory ```seq_to_pheno/tcga/data/variants/vcf/``` that will contain our combined annotate vcf.
+
+### Get sequences
+We can now take these filtered and merged variant calls and then generate protein sequences based on the variants found. It will account for all overlapping variants in a transcript and create a protein-fasta file of the resulting protein-sequence. 
+
+We can run this using ```get_sequences.py```
+
+This will create two new directories:
+
+```
+seq_to_pheno/tcga/data/variants/mutated_proteins
+seq_to_pheno/tcga/data/variants/wildtype_proteins/
+```
+
+These are dirrectories that will contain the various protein-fasta sequences of our mutated proteins as well as their wildtype counterparts.
+
+Mutant transcripts
+```
+➜ ls seq_to_pheno/tcga/data/variants/mutated_proteins | head
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000003084_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000020673_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000046087_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000192314_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000228327_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000229030_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000230859_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000245255_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000248058_mutated.fasta 
+0009b464-b376-4fbc-8a56-da538269a02f_ENST00000253001_mutated.fasta
+
+```
+
+In mutated_proteins you will also find log files for variants that passed filtration but coulnd't be included in the protein transcript for one reason or another:
+
+```
+➜ ls seq_to_pheno/tcga/data/variants/mutated_proteins/*failed* | head
+0009b464-b376-4fbc-8a56-da538269a02f_failed_variants.log 
+005794f1-5a87-45b5-9811-83ddf6924568_failed_variants.log 
+00b9d0e6-69dc-4345-bffd-ce32880c8eef_failed_variants.log 
+00db1b95-8ca3-4cc4-bb46-6b8c8019a7c7_failed_variants.log 
+0168a2a6-c3af-4d58-a51c-d33f0fc7876d_failed_variants.log 
+02917220-6a7a-46a1-8656-907e96bef88e_failed_variants.log 
+03ad38a6-0902-4aaa-84a3-91ea88fa9883_failed_variants.log 
+03c3c692-8a86-4843-85ae-e045f0fa6f88_failed_variants.log 
+046d7386-95c8-4501-9e55-c85bec272a7a_failed_variants.log 
+04b570c2-3224-4e9b-81cc-089b4a7ff07a_failed_variants.log
+```
+
+>**NOTE**: Although these errors represent a small minority of all variant calls we process here -- these instances will need to be investigated eventually. Most likely, there is some mismatch with the reference used to create this call vs the one we've used so far. This is likely due to an upstream issue inherenet to the dataset, but that will have to be proven.
+
+
+Wildtype transcripts:
+
+```
+➜ ls seq_to_pheno/tcga/data/variants/wildtype_proteins | head 
+ENST00000001008.fasta 
+ENST00000001146.fasta 
+ENST00000002125.fasta 
+ENST00000002165.fasta 
+ENST00000002596.fasta 
+ENST00000002829.fasta 
+ENST00000003084.fasta 
+ENST00000003302.fasta 
+ENST00000003583.fasta 
+ENST00000004103.fasta
+
+```
+
+### Protein Metadata Construction
+
+Okay, now that we have all of our sequences generated we must them back to sample metadata. 
+
+For this, I have created ```create_protein_metadata_table.py```
+
+This script will create a table that will create a unique row for each mutated_protein we've generated and with columns that contain the related wildtype_protein as well as important metadata related to the indivdual that whoose tumor transcribed the mutant protein. 
+
+This script can be run to only include relative paths to the proteins:
+
+```
+➜ python seq-to-pheno/seq_to_pheno/tcga/create_protein_metadata_table.py
+
+Metadata table saved to seq_to_pheno/tcga/data/protein_sequences_metadata.tsv
+```
+
+Inside table:
+```
+aliquot_id      mutated_protein_path    wildtype_protein_path   wgs_aliquot_id  Cancer Type     Cancer Stage    Donor Survival Time     Donor Vital Status      Donor Age at Diagnosis Tumour Grade    Donor Sex       Histology Abbreviation
+8fb9496e-ddb8-11e4-ad8f-5ed8e2d07381    seq_to_pheno/tcga/data/variants/mutated_proteins/80ab6c08-c622-11e3-bf01-24c6515278c0_ENST00000512632_mutated.fasta     seq_to_pheno/tcga/data/variants/wildtype_proteins/ENST00000512632.fasta        80ab6c08-c622-11e3-bf01-24c6515278c0    Liver Cancer - RIKEN, JP        2       1440.0  deceased       67.0    I       male    Liver-HCC
+```
+
+The script can also be run to include the actual mutant and wildtype transcripts in the table as well by using the ```-include-sequences``` flag:
+
+```
+➜ python seq-to-pheno/seq_to_pheno/tcga/create_protein_metadata_table.py -include-sequences
+Metadata table saved to seq_to_pheno/tcga/data/protein_sequences_metadata.tsv
+```
+
+Inside table:
+```
+aliquot_id      mutated_protein_path    wildtype_protein_path   wgs_aliquot_id  Cancer Type     Cancer Stage    Donor Survival Time     Donor Vital Status      Donor Age at Diagnosis Tumour Grade    Donor Sex       Histology Abbreviation
+8fb6f8bc-ddb8-11e4-ad8f-5ed8e2d07381    MLTRLQVLTLALFSKGFLLSLGDHNFLRREIKIEGDLVLGGLFPINEKGTGTEECGRINEDRGIQRLEAMLFAIDEINKDDYLLPGVKLSVHILDTCSRDTYALEQSLEFVRASLTKVDEAEYMCPDGSYAIQENIPLLIAGVIGGSYSSVSIQVANLLRLFQIPQISYASTSAKLSDKSRYDYFARTVPPDFYQAKAMAEILRFFNWTYVSTVASEGDYGETGIEAFEQEARLRNICIATAEKVGRSNIRKSYDSVIRELLQKPNARVVVLFMRSDDSRELIAAASRANASFTWVASDGWGAQESIIKGSEHVAYGAITLELASQPVRQFDRYFQSLNPYNNHRNPWFRDFWEQKFQCSLQNKRNHRRVCDKHLAIDSSNYEQESKIMFVVNAVYAMAHALHKMQRTLCPNTTKLCDAMKILDGKKLYKDYLLKINFTGADDNHVHLCQPEWLCGLGLFVCTQGSHHPVSTPEECCHTQTAPQQVQCQWNWDHILSVLCKHVCANGVQWAGSPRLHHLISVIVNCSSVLVFLDC*     MLTRLQVLTLALFSKGFLLSLGDHNFLRREIKIEGDLVLGGLFPINEKGTGTEECGRINEDRGIQRLEAMLFAIDEINKDDYLLPGVKLGVHILDTCSRDTYALEQSLEFVRASLTKVDEAEYMCPDGSYAIQENIPLLIAGVIGGSYSSVSIQVANLLRLFQIPQISYASTSAKLSDKSRYDYFARTVPPDFYQAKAMAEILRFFNWTYVSTVASEGDYGETGIEAFEQEARLRNICIATAEKVGRSNIRKSYDSVIRELLQKPNARVVVLFMRSDDSRELIAAASRANASFTWVASDGWGAQESIIKGSEHVAYGAITLELASQPVRQFDRYFQSLNPYNNHRNPWFRDFWEQKFQCSLQNKRNHRRVCDKHLAIDSSNYEQESKIMFVVNAVYAMAHALHKMQRTLCPNTTKLCDAMKILDGKKLYKDYLLKINFTGADDNHVHLCQPEWLCGLGLFVCTQGSHHPVSTPEECCHTQTAPQQVQCQWNWDHILSVLCKHVCANGVQWAGSPRLHHLISVIVNCSSVLVFLDC*     15fd8dc8-c622-11e3-bf01-24c6515278c0    Liver Cancer - RIKEN, JP       4       1200.0  deceased        62.0    III     male    Liver-HCC
+```
+
+## Next Steps
+
+With this table we are at the point where we are very close to being ready to generate embeddings. We just need to create a way to subset the table intelligentl.
+
+### Example Analysis:
+
+- Load the seq_to_pheno/tcga/data/protein_sequences_metadata.tsv table into a dataframe
+- Filter for a cancer type (Liver Cancer)
+- Filter for a certain cancer stage (2 or T3N0MX)
+- Order table by donor survival time
+- Generate embeddings of wildtype and mutant transcripts.
+- Experiment: 
+  - Wildtype embeddings should cluster separately from mutant embeddings.
+  - Mutant embeddings should cluster based on the extremes of donor survival time. 
+  - Transcripts with the highest relational effect should show patterns across all/most subjects.
+
+Don't feel committed to this exact example analysis. There are probably many ways we can create a reasonable and reproducable experiment. 
